@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@media (min-width: 768px) {
+  ::-webkit-scrollbar {
+    @apply w-1 bg-transparent
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply shadow-stone-900 dark:bg-zinc-100 bg-zinc-900 hover:bg-stone-600 rounded-lg
+  }
+}
+
+[data-theme="dark"]:root {
+  color-scheme: dark;
+}
+
+.invertable {
+  @apply opacity-[80%] dark:invert
+}
+
+.nobr {
+  @apply whitespace-nowrap
+}
+
+.tag {
+  @apply dark:bg-[--dark-tag-color] bg-[--light-tag-color]
+}
+
+.question {
+  @apply px-2 py-1 rounded-xl
+  border border-zinc-200 shadow
+  cursor-pointer
+  prose-p:my-1
+  dark:border-zinc-800 dark:shadow-zinc-900
+  target:bg-zinc-100 target:border target:border-zinc-200 target:shadow target:my-6
+  dark:target:bg-zinc-800 dark:target:border-zinc-900 dark:target:shadow dark:target:shadow-zinc-900
+  hover:bg-zinc-200 dark:hover:bg-zinc-900 hover:shadow dark:hover:shadow-zinc-900
+}

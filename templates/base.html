@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="pt-BR">
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="/assets/tw.css" rel="stylesheet" />
+  <link rel="icon" href="/assets/qed.ico" />
+
+  <title>{% block title %}qed{% endblock %}</title>
+
+  <script src="/assets/js/_hyperscript.min.js"></script>
+  <script src="/assets/js/htmx.min.js"></script>
+
+  <link rel="stylesheet" href="/assets/js/katex.min.css" />
+  <script defer src="/assets/js/katex.min.js"></script>
+  <script defer type="module">
+    import renderMathInElement from "/assets/js/contrib/auto-render.mjs";
+    const options = {
+      macros: {
+        "\\vv": "\\overrightarrow",
+        "\\deg": "#1\\!\\degree",
+        "\\norm": "\\lVert#1\\rVert",
+      },
+    };
+
+    renderMathInElement(document.body, options);
+
+    document.addEventListener("htmx:afterSwap", (e) => {
+      renderMathInElement(e.target, options);
+    })
+  </script>
+
+  <script>
+    const themeSet = new Set(["dark", "light"]);
+    const theme = window.localStorage.getItem("theme");
+    const preference = window.matchMedia("(prefers-color-scheme: dark)")
+      .matches
+      ? "dark"
+      : "light";
+
+    const root = document.documentElement;
+    root.setAttribute("data-theme", themeSet.has(theme) ? theme : preference);
+
+    function toggleScheme() {
+      let theme = root.getAttribute("data-theme");
+      theme = theme === "dark" ? "light" : "dark";
+
+      root.setAttribute("data-theme", theme);
+      window.localStorage.setItem("theme", theme);
+    }
+  </script>
+</head>
+
+{% macro icon_toggle_scheme() %}
+<svg aria-hidden class="h-auto w-5" xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 16 16">
+  <path fill="currentColor"
+    d="M8 1a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 8 1m2.5 7a2.5 2.5 0 1 1-5 0a2.5 2.5 0 0 1 5 0m2.45-3.89a.75.75 0 1 0-1.06-1.06l-1.062 1.06a.75.75 0 0 0 1.061 1.062zM15 8a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 15 8m-3.11 4.95a.75.75 0 0 0 1.06-1.06l-1.06-1.062a.75.75 0 0 0-1.062 1.061zM8 12a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 8 12m-2.828-.11a.75.75 0 0 0-1.061-1.062L3.05 11.89a.75.75 0 1 0 1.06 1.06zM4 8a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 4 8m.11-2.828A.75.75 0 0 0 5.173 4.11L4.11 3.05a.75.75 0 1 0-1.06 1.06z" />
+</svg>
+{% endmacro %}
+
+{% macro icon_go_back() %}
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" data-slot="icon"
+  width="200" height="200" class="h-auto w-5">
+  <path fill-rule="evenodd"
+    d="M11.03 3.97a.75.75 0 0 1 0 1.06l-6.22 6.22H21a.75.75 0 0 1 0 1.5H4.81l6.22 6.22a.75.75 0 1 1-1.06 1.06l-7.5-7.5a.75.75 0 0 1 0-1.06l7.5-7.5a.75.75 0 0 1 1.06 0Z"
+    clip-rule="evenodd"></path>
+</svg>
+{% endmacro %}
+
+{% macro icon_user() %}
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-auto w-5">
+  <path fill-rule="evenodd"
+    d="M7.5 6a4.5 4.5 0 1 1 9 0 4.5 4.5 0 0 1-9 0ZM3.751 20.105a8.25 8.25 0 0 1 16.498 0 .75.75 0 0 1-.437.695A18.683 18.683 0 0 1 12 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 0 1-.437-.695Z"
+    clip-rule="evenodd" />
+</svg>
+{% endmacro %}
+
+{% macro header_bnt(label, hs) %}
+<button
+  class="flex h-8 w-8 items-center justify-center rounded-full border-2 border-zinc-200 shadow hover:bg-zinc-200 dark:border-zinc-800 dark:shadow-zinc-800 dark:hover:bg-zinc-800 "
+  type="button" aria-label="{{ lable }}" _="{{ hs }}">
+  {{ caller() }}
+</button>
+{% endmacro %}
+
+<body class="mx-auto hyphens-auto text-justify dark:bg-black dark:text-slate-200 dark:[color-scheme:_dark] [will-change: transform-gpu]">
+  <dialog _="
+    on popstate from window close() on me
+
+    on mutation of @open toggle .overflow-hidden on <body/>
+
+    on show
+      showModal() on me then
+      pushState({}, '') the history of window
+
+    on mousedown(x, y)
+      measure me
+      set isBetween to \l,m,h -> l <= x and x <= h
+      set b to it's bounds
+      if not (isBetween(b.left, x, b.right) and isBetween(b.top, y, b.bottom)) then
+        close() on me
+      end
+    " class="backdrop:bg-black/50 backdrop:backdrop-blur-md dark:bg-black rounded-md overflow-y-scroll overflow-clip">
+
+  </dialog>
+
+  <header
+    class="flex items-center gap-3 border-b border-b-zinc-200 px-3 py-3 shadow dark:border-b-zinc-800 dark:shadow-zinc-800">
+    {% call header_bnt(
+      label="go back",
+      hs="
+      on mousedown
+      go back
+      log window.history.length
+      ",
+    )
+    %}
+    {{ icon_go_back() }}
+    {% endcall %}
+
+    {% call header_bnt(label="toggle scheme", hs="on mousedown toggleScheme()") %}
+    {{ icon_toggle_scheme() }}
+    {% endcall %}
+
+    <div class="m-auto"></div>
+
+    {% if user_picture %}
+      <img src="{{ user_picture }}" alt="user icon" class="h-auto w-8 rounded-full" />
+    {% else %}
+      {% call header_bnt(label="login", hs="on mousedown go to url /login") %}
+      {{ icon_user() }}
+      {% endcall %}
+    {% endif %}
+  </header>
+
+
+  <main>
+    {% block body %}
+    <div
+      class="prose mx-auto max-w-[80ch] px-8 py-6 dark:prose-invert prose-ol:pl-2 prose-ul:pl-4 prose-li:pl-0 prose-img:mx-auto">
+      {% autoescape false %}{{ content }}{% endautoescape %}
+    </div>
+    {% endblock %}
+  </main>
+
+  <footer class="mt-10 h-20"></footer>
+</body>
+
+</html>

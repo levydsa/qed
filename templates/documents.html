@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block body %}
+  <ul class="mx-auto flex max-w-[110ch] flex-wrap justify-center px-8 py-7">
+    {% for i in range(1, 10) %}
+      {%- for document in documents -%}
+        <li
+          hx-select="main" hx-target="previous dialog" hx-get="/d/{{ document.metadata.uuid }}" _="on click trigger show on previous <dialog/>"
+          class="mx-2 my-2 flex max-w-[50ch] flex-grow basis-[35ch] flex-col gap-3 rounded-xl border-2 border-zinc-200 px-5 py-4 shadow dark:border-zinc-800 dark:shadow dark:shadow-zinc-900 cursor-pointer"
+        >
+        <a>{{ document.metadata.title }}</a>
+          <div class="flex flex-row flex-wrap gap-2">
+            {% for tag in document.metadata.tags %}
+              <div
+                style="--dark-tag-color: {{ tag_color(tag, 0.55) }}; --light-tag-color: {{ tag_color(tag, 0.73) }}"
+                class="tag max-w-fit rounded-full px-2"
+              >
+                {{ tag }}
+              </div>
+            {% endfor %}
+          </div>
+        </li>
+      {%- endfor -%}
+    {%- endfor -%}
+    <ul></ul>
+  </ul>
+{%- endblock -%}

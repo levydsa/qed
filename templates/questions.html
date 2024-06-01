@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block body %}
+  <ul class="mx-8 my-8 basis-[45ch] max-w-[45ch] flex-shrink">
+    {%- for question in questions -%}
+      <li
+        class="my-5 mx-2 flex flex-col gap-3 rounded-xl border-2 border-zinc-200 px-5 py-5 shadow dark:border-zinc-800 dark:shadow dark:shadow-zinc-900"
+      >
+        <a href="/d/{{ question.parent }}#q{{ question.position }}">
+          <pre class="text-sm text-zinc-400 flex-shrink overflow-hidden overflow-ellipsis">{{ question.id }}</pre>
+        </a>
+        <div class="flex flex-row flex-wrap gap-2">
+          {% for tag in question.tags %}
+            <div
+              style="--dark-tag-color: {{ tag_color(tag, 0.55) }}; --light-tag-color: {{ tag_color(tag, 0.77) }}"
+              class="tag max-w-fit rounded-full px-2"
+            >
+              {{ tag }}
+            </div>
+          {% endfor %}
+        </div>
+      </li>
+    {%- endfor -%}
+  </ul>
+{%- endblock -%}

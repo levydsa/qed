@@ -1,0 +1,44 @@
+[package]
+name = "qed-web"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+futures = { workspace = true }
+tokio = { workspace = true }
+
+axum = { workspace = true }
+axum-macros = { workspace = true }
+axum-extra = {workspace = true }
+
+tower = { workspace = true }
+tower-http = { workspace = true }
+tower-livereload = { workspace = true }
+
+jsonwebtoken = { workspace = true }
+oauth2 = { workspace = true }
+reqwest = { workspace = true }
+
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+qed-core = { workspace = true }
+maud = { workspace = true }
+dotenv = { workspace = true }
+
+serde = { workspace = true }
+rand = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v5", "v4"] }
+
+minijinja = { version = "2.0.1", features = ["loader"] }
+jotdown.workspace = true
+minijinja-autoreload = "2.0.1"
+toml = "0.8.13"
+walkdir = "2.5.0"
+oklab = "1.0.1"
+notify = "6.1.1"
+lazy_static = "1.4.0"
+itertools = "0.13.0"

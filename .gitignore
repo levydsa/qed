@@ -1,0 +1,7 @@
+/target
+/node_modules
+/assets/js/*
+.direnv
+.env*
+!.envrc
+/result

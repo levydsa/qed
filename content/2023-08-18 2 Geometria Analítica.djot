@@ -1,0 +1,85 @@
+```=toml
+uuid = "c82fcbc6-49f5-42cf-9a8b-478cef1541e6"
+title = "2º Exercício de verificação de Geometria Analítica"
+date = 2023-08-18
+tags = [
+  'geometria analítica',
+  'UFPE',
+]
+```
+
+Atenção: Justifique todas as suas respostas. Considere que foi fixado um
+Sistema de coordenadas cartesiano $`Σ = (O, E)` para o espaço, onde o
+ponto $`O` é a origem e $`E` é uma base ortonormal positiva.
+
+- Considere o tetraedro $`ABC\!D` em que $`A = (−3, −2, 1)`, $`D = (−2, −4, 2)`,
+$`\vv{AB} = (4, 3, 1)`, $`\vv{C\!A} = (4, 3, 0).`
+
+  - 
+    {data-tags="vetores"}
+    ::: question
+    Determine as coordenadas do ponto $`C.`
+    :::
+  - 
+    {data-tags="vetores,área"}
+    ::: question
+    Determine a área do triângulo $`ABC.`
+    :::
+  - 
+    {data-tags="vetores,volume"}
+    ::: question
+    Determine o volume do tetraedro $`ABC\!D.`
+    :::
+
+- Considere a reta $`
+  r : \left\{\begin{aligned}
+    x + y + z &= 0 \\
+    y + z − 2 &= 0 \\
+  \end{aligned}\right.` e o plano $`π_1 : x + 2z − 3 = 0.`
+
+  - 
+    {data-tags="equação da reta"}
+    ::: question
+    Determine uma equação vetorial para a reta $`r.`
+    :::
+
+  - 
+    {data-tags="equação do plano"}
+    ::: question
+    Determine uma equação geral para o plano $`π` que contém a reta $`r` e
+    e perpendicular ao plano $`π_1.`
+    :::
+
+- Considere as retas $`r : X = (11, −7, 1) + λ(1, −1, 0)` e $`s:~\left\{\begin{aligned}
+  x &= 1 + λ \\
+  y &= 1 \\
+  z &= 1 − 2λ
+  \end{aligned}\right.
+  `, e os planos $`π : 2x − 2y − z + 1 = 0` e $`α : x − z = 0.`
+
+  - 
+    {data-tags="equação do plano"}
+    ::: question
+    Determine a posição relativa e, caso exista, a interseção entre a reta
+    $`r` e o plano $`π.`
+    :::
+  - 
+    {data-tags="distância entre retas"}
+    ::: question
+    Calcule a distância entre as retas $`r` e $`s.`
+    :::
+  - 
+    {data-tags="projeção"}
+    ::: question
+    Determine a projeção ortogonal da reta r sobre o plano $`π.`
+    :::
+  - ::: question
+    Calcule a medida angular entre os planos $`π` e $`α.`
+    :::
+
+- ::: question
+  Sejam $`\vec{u}`, $`\vec{v}` e $`\vec{w}` vetores tais que
+  $`\left[\vec{u},\vec{v},\vec{w}\right] = 7`.
+  Calcule $`\left[ \vec{w},\vec{u} + 2⃗\vec{v}, -\vec{u} \right].`
+  :::
+
