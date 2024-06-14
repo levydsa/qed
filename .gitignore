@@ -1,7 +1,9 @@
 /target
 /node_modules
 /assets/js/*
+/assets/tw.css
 .direnv
 .env*
 !.envrc
 /result
+*.db*

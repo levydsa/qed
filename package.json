@@ -1,16 +1,28 @@
 {
-  "dependencies": { "htmx.org": "^1.9.12", "hyperscript.org": "^0.9.12", "katex": "^0.16.10" },
+  "name": "qed",
+  "version": "0.1.0",
+  "dependencies": {
+    "htmx.org": "^1.9.12",
+    "hyperscript.org": "^0.9.12",
+    "katex": "^0.16.10"
+  },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.13",
-    "prettier": "3.2.5",
+    "prettier": "^3.3.0",
     "prettier-plugin-jinja-template": "^1.4.0",
-    "prettier-plugin-tailwindcss": "^0.5.14"
+    "prettier-plugin-tailwindcss": "^0.6.1",
+    "tailwindcss": "^3.4.3"
   },
   "prettier": {
-    "plugins": ["prettier-plugin-tailwindcss", "prettier-plugin-jinja-template"],
+    "plugins": [
+      "prettier-plugin-tailwindcss",
+      "prettier-plugin-jinja-template"
+    ],
     "overrides": [
       {
-        "files": ["templates/*.html"],
+        "files": [
+          "templates/*.html"
+        ],
         "options": {
           "parser": "jinja-template"
         }

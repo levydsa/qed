@@ -2,73 +2,239 @@
 #![allow(unused)]
 #![feature(duration_constructors)]
 
-use std::{
-    collections::HashMap,
-    convert::Infallible,
-    env, fs,
-    hash::{DefaultHasher, Hasher},
-    ops::DerefMut,
-    path::{self, PathBuf},
-    sync::Arc,
-    time::{self, Instant},
-};
-
-use jwt::DecodingKey;
-use qed_core::Repository;
-
+use anyhow::anyhow;
 use axum::{
     async_trait,
-    extract::{FromRef, FromRequestParts, Path, Query, Request, State},
+    extract::{ConnectInfo, FromRef, FromRequestParts, Host, OriginalUri, Path, Query, Request, State},
     handler::HandlerWithoutStateExt,
     http::{request::Parts, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
-    Extension, Json, Router,
+    Extension, Json, RequestExt, Router, ServiceExt,
 };
 use axum_extra::extract::{
-    cookie::{self, Cookie, SameSite},
+    cookie::{self, Cookie, Expiration, SameSite},
     CookieJar,
 };
+use extractors::SessionId;
 use itertools::Itertools;
 use jotdown::Render;
-use jsonwebtoken as jwt;
 use lazy_static::lazy_static;
 use minijinja::{context, path_loader, value::ViaDeserialize};
 use notify::Watcher;
 use oauth2::{
-    basic::BasicClient, reqwest::async_http_client, AuthUrl, AuthorizationCode, ClientId,
-    ClientSecret, CsrfToken, RedirectUrl, RevocationUrl, Scope, TokenResponse, TokenUrl,
+    basic::{BasicClient, BasicErrorResponseType},
+    reqwest::async_http_client,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl, RevocationUrl,
+    Scope, StandardErrorResponse, TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::{
+    collections::HashMap, convert::Infallible, env, fs, hash::{DefaultHasher, Hasher}, net::SocketAddr, ops::{Deref, DerefMut}, path::{self, PathBuf}, str::FromStr, sync::Arc, time::Instant
+};
+use time::OffsetDateTime;
 use tokio::{
     net::TcpListener,
     sync::{Mutex, RwLock},
 };
+use tower::ServiceBuilder;
 use tower_http::{
+    timeout::TimeoutLayer,
     catch_panic::CatchPanicLayer,
     compression::CompressionLayer,
     services::{ServeDir, ServeFile},
 };
 use tower_livereload::LiveReloadLayer;
-use tracing::{info, level_filters::LevelFilter, warn};
+use tracing::{info, level_filters::LevelFilter, span, trace, warn, Level};
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{
+    filter::EnvFilter,
+    fmt::{self, time::FormatTime},
+    layer::SubscriberExt,
+};
 use uuid::{uuid, Uuid};
 use walkdir::WalkDir;
+
+use qed_core::Repository;
 
 mod extractors;
 mod infra;
 
 use crate::extractors::User;
-use crate::infra::MemoryRepository;
+use crate::infra::libsql::LibsqlRepository;
+use crate::infra::mem::MemoryRepository;
+
+struct Config {
+    oauth_google_client_id: String,
+    oauth_google_client_secret: String,
+
+    turso_url: String,
+    turso_token: String,
+
+    hmac_key: String,
+}
+
+type PageStore = HashMap<Uuid, Document>;
+
+struct App {
+    reloader: minijinja_autoreload::AutoReloader,
+    google_auth_client: BasicClient,
+    db: Arc<libsql::Database>,
+    repository: Arc<Mutex<LibsqlRepository>>,
+    documents: Arc<RwLock<PageStore>>,
+}
+
+pub trait LibsqlValueExt {
+    fn to_value<'a>(&'a self) -> libsql::ValueRef<'a>;
+}
+
+impl LibsqlValueExt for Uuid {
+    fn to_value<'a>(&'a self) -> libsql::ValueRef<'a> {
+        libsql::ValueRef::Blob(self.as_bytes())
+    }
+}
+
+impl LibsqlValueExt for String {
+    fn to_value<'a>(&'a self) -> libsql::ValueRef<'a> {
+        libsql::ValueRef::Text(self.as_bytes())
+    }
+}
+
+#[async_trait]
+trait SessionStore {
+    type Id;
+    type Record;
+    type Error;
+
+    async fn is_valid(&self, id: Self::Id) -> Result<bool, Self::Error>;
+    async fn get(&self, id: Self::Id) -> Result<Self::Record, Self::Error>;
+    async fn set(&self, id: Self::Id, record: Self::Record) -> Result<(), Self::Error>;
+    async fn register(&self) -> Result<Self::Id, Self::Error>;
+    async fn deregister(&self, id: Self::Id) -> Result<(), Self::Error>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct SessionRecord {
+    csrf_state: Option<String>,
+    user_id: Option<Uuid>,
+}
+
+impl From<SessionRecord> for libsql::Value {
+    fn from(val: SessionRecord) -> Self {
+        libsql::Value::Text(serde_json::to_string(&val).unwrap())
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+enum SessionError {
+    #[error("session not found")]
+    SessionNotFound,
+
+    #[error(transparent)]
+    Libsql(#[from] libsql::Error),
+
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+struct LibsqlSessionStore(libsql::Connection);
+
+#[async_trait]
+impl SessionStore for LibsqlSessionStore {
+    type Id = Uuid;
+    type Record = SessionRecord;
+    type Error = SessionError;
+
+    async fn is_valid(&self, id: Self::Id) -> Result<bool, Self::Error> {
+        let mut rows = self
+            .0
+            .query(
+                "SELECT count(*) FROM sessions WHERE id = ?1",
+                [id.as_bytes().to_vec()],
+            )
+            .await?;
+
+        let row = rows.next().await?.unwrap();
+
+        Ok(row.get::<i32>(0)? == 1)
+    }
+
+    async fn get(&self, id: Self::Id) -> Result<Self::Record, Self::Error> {
+        let mut rows = self
+            .0
+            .query(
+                "SELECT data FROM sessions WHERE id = ?1",
+                [id.as_bytes().as_ref()],
+            )
+            .await?;
+
+        let row = rows.next().await?.ok_or(SessionError::SessionNotFound)?;
+
+        use libsql::Value as V;
+        match row.get_value(0)? {
+            V::Null => Ok(Default::default()),
+            V::Text(text) => Ok(serde_json::from_str(text.as_str())?),
+            _ => panic!("data field should be either null or text"),
+        }
+    }
+
+    async fn set(&self, id: Self::Id, record: Self::Record) -> Result<(), Self::Error> {
+        let mut rows_changed = self
+            .0
+            .execute(
+                "UPDATE sessions SET data = ?1 WHERE id = ?2",
+                libsql::params![record, id.as_bytes().as_ref()],
+            )
+            .await?;
+
+        assert!(rows_changed <= 1);
+
+        Ok(())
+    }
+
+    async fn register(&self) -> Result<Self::Id, Self::Error> {
+        let id = Uuid::now_v7();
+
+        info!("created another session {id}", id = id);
+
+        let mut rows_changed = self
+            .0
+            .execute(
+                "INSERT INTO sessions (id) VALUES (?1)",
+                libsql::params![id.as_bytes().to_vec()],
+            )
+            .await?;
+
+        assert!(rows_changed == 1);
+        Ok(id)
+    }
+
+    async fn deregister(&self, id: Self::Id) -> Result<(), Self::Error> {
+        info!("deleted session {id}", id = id);
+
+        let mut rows_changed = self
+            .0
+            .execute(
+                "DELETE FROM sessions WHERE id = ?1",
+                libsql::params![id.as_bytes().to_vec()],
+            )
+            .await?;
+
+        assert!(rows_changed == 1);
+
+        Ok(())
+    }
+}
+
+const CSRF_STATE_KEY: &str = "csrf_state";
 
 #[derive(thiserror::Error, Debug)]
 enum Error {
-    #[error(transparent)]
-    Libcore(#[from] qed_core::Error),
-
-    #[error(transparent)]
-    Jwt(#[from] jwt::errors::Error),
-
     #[error(transparent)]
     OauthUrlParse(#[from] oauth2::url::ParseError),
 
@@ -88,7 +254,25 @@ enum Error {
     Io(#[from] std::io::Error),
 
     #[error(transparent)]
+    Libsql(#[from] libsql::Error),
+
+    #[error(transparent)]
+    De(#[from] serde::de::value::Error),
+
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+
+    #[error(transparent)]
     Other(#[from] anyhow::Error),
+
+    #[error(transparent)]
+    Session(#[from] SessionError),
+
+    #[error(transparent)]
+    MemoryRepository(#[from] infra::mem::Error),
+
+    #[error(transparent)]
+    LibsqlRepository(#[from] infra::libsql::Error),
 
     #[error("Invalid CSRF state, found `{found}` (expected `{expected}`)")]
     InvalidCsrf { expected: String, found: String },
@@ -104,35 +288,20 @@ impl IntoResponse for Error {
     }
 }
 
-fn tag_color(s: ViaDeserialize<String>, l: ViaDeserialize<f32>) -> String {
-    let mut hasher = DefaultHasher::new();
-    hasher.write(s.as_bytes());
-    let n = hasher.finish();
+fn host_to_callback(Host(host): Host, path: impl AsRef<str>) -> String {
+    let path = path.as_ref();
 
-    let a = (n.wrapping_shr(8 + 1) & 0xff) as u8;
-    let b = (n.wrapping_shr(2) & 0xff) as u8;
-    let lr = ((n & 0b1111) as i8 - 0b1000) as f32;
-
-    let r = 0.5;
-    let offset = r / 2.;
-
-    let a = (a as f32 / u8::MAX as f32) * r - offset;
-    let b = (b as f32 / u8::MAX as f32) * r - offset;
-
-    let c = oklab::oklab_to_srgb(oklab::Oklab {
-        l: l.0 + lr * 0.01,
-        a,
-        b,
-    });
-
-    format!("{}", c)
+    if host.starts_with("localhost:") {
+        format!("http://{host}{path}")
+    } else {
+        format!("https://{host}{path}")
+    }
 }
 
 fn parse(path: impl AsRef<path::Path>, repo: &mut impl qed_core::Repository) -> Document {
     use jotdown::{Container as C, Event as E};
 
     let input = String::from_utf8(fs::read(path.as_ref()).unwrap()).unwrap();
-
     let mut events = jotdown::Parser::new(input.as_ref()).collect::<Vec<_>>();
     let mut toml: Option<String> = None;
 
@@ -231,29 +400,29 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 async fn document(
     State(app): State<Arc<App>>,
     Path(uuid): Path<Uuid>,
+    User(user): extractors::User,
 ) -> Result<impl IntoResponse> {
     let docs = app.documents.read().await;
     let document = docs.get(&uuid).unwrap();
 
     let env = app.reloader.acquire_env().unwrap();
-    let home_template = env.get_template("base.html")?;
+    let home_template = env.get_template("document.html")?;
 
-    Ok(Html(
-        home_template.render(context!(content => document.html))?,
-    ))
+    Ok(Html(home_template.render(context! {
+        content => document.html,
+        user_picture => user.map(|user| user.picture),
+    })?))
 }
 
-async fn documents(
+async fn document_list(
     State(app): State<Arc<App>>,
-    Extension(dec_key): Extension<Arc<jwt::DecodingKey>>,
-    Extension(header): Extension<Arc<jwt::Header>>,
     User(user): extractors::User,
 ) -> Result<impl IntoResponse> {
     let docs = app.documents.read().await;
     let repo = app.repository.lock().await;
 
     let env = app.reloader.acquire_env().unwrap();
-    let home_template = env.get_template("documents.html")?;
+    let home_template = env.get_template("document_list.html")?;
 
     Ok(Html(home_template.render(context! {
         documents => docs.values().collect::<Vec<_>>(),
@@ -290,20 +459,19 @@ pub struct Claims {
 }
 
 async fn google_callback(
-    Query(params): Query<Params>,
     State(app): State<Arc<App>>,
-    Extension(enc_key): Extension<Arc<jwt::EncodingKey>>,
-    Extension(header): Extension<Arc<jwt::Header>>,
-    jar: CookieJar,
+    Query(params): Query<Params>,
+    SessionId(id): SessionId,
+    host: Host,
+    req: Request,
 ) -> Result<impl IntoResponse> {
-    let mut repo = app.repository.lock().await;
+    let session_store = LibsqlSessionStore(app.db.connect()?);
 
     let code = AuthorizationCode::new(params.code);
 
-    let expected_state = jar
-        .get("csrf_state")
-        .map(|cookie| cookie.value())
-        .unwrap_or("");
+    let record = session_store.get(id).await?;
+
+    let expected_state = record.csrf_state.clone().unwrap_or("".to_string());
 
     if expected_state != params.state {
         return Err(Error::InvalidCsrf {
@@ -314,10 +482,16 @@ async fn google_callback(
 
     let token_result = app
         .google_auth_client
+        .clone()
+        .set_redirect_uri(RedirectUrl::new(host_to_callback(
+            host,
+            "/oauth/google/callback",
+        ))?)
         .exchange_code(code)
         .request_async(&async_http_client)
         .await
-        .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        // TODO: fix this shit, this error type is the definition of evil.
+        .map_err(|err| anyhow!("{:?}", err))?;
 
     let google_user: qed_core::GoogleUser = reqwest::Client::new()
         .get("https://openidconnect.googleapis.com/v1/userinfo")
@@ -329,80 +503,158 @@ async fn google_callback(
 
     let auth = qed_core::Auth::GoogleOauth(google_user.clone());
 
-    let user = match repo.register_user(auth.clone()).await {
+    let mut repo = app.repository.lock().await;
+
+    use qed_core::UserError as UE;
+
+    let user = repo.register_user(auth.clone()).await?;
+    let user = match user {
         Ok(user) => user,
-        Err(qed_core::Error::UserAlreadyRegistered) => repo.get_user_from_auth(auth).await.unwrap(),
-        Err(_) => unreachable!(),
+        Err(err) => match err {
+            UE::UserAlreadyExists => repo
+                .get_user_from_auth(auth.clone())
+                .await?
+                .expect("if user already exists, this is unreachable"),
+            UE::UserNotFound => unreachable!(),
+        },
     };
 
-    Ok((
-        jar.add(
-            Cookie::build((
-                "auth",
-                jwt::encode(
-                    &header,
-                    &Claims {
-                        sub: user.id,
-                        exp: jwt::get_current_timestamp()
-                            + tokio::time::Duration::from_days(3).as_secs(),
-                    },
-                    &enc_key,
-                )?,
-            ))
-            .same_site(SameSite::Lax)
-            .secure(true)
-            .http_only(true)
-            .path("/")
-            .build(),
-        ),
-        Redirect::to("/d/"),
-    ))
+    session_store
+        .set(
+            id,
+            SessionRecord {
+                user_id: Some(user.id),
+                ..record
+            },
+        )
+        .await?;
+
+    Ok(Redirect::to("/d"))
 }
 
-async fn login(State(app): State<Arc<App>>, jar: CookieJar) -> impl IntoResponse {
+async fn login(
+    State(app): State<Arc<App>>,
+    SessionId(id): SessionId,
+    host: Host,
+) -> Result<impl IntoResponse> {
     let (authorize_url, csrf_state) = app
         .google_auth_client
+        .clone()
+        .set_redirect_uri(RedirectUrl::new(host_to_callback(
+            host,
+            "/oauth/google/callback",
+        ))?)
         .authorize_url(CsrfToken::new_random)
         .add_scope(Scope::new("profile".to_string()))
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("openid".to_string()))
         .url();
 
-    (
-        jar.add(
-            Cookie::build(("csrf_state", csrf_state.secret().to_owned()))
-                .same_site(SameSite::Lax)
-                .secure(true)
-                .http_only(true)
-                .build(),
-        ),
-        Redirect::to(authorize_url.as_str()),
-    )
+    let session_store = LibsqlSessionStore(app.db.connect()?);
+    let record = session_store.get(id).await?;
+    session_store
+        .set(
+            id,
+            SessionRecord {
+                csrf_state: Some(csrf_state.secret().to_owned()),
+                ..record
+            },
+        )
+        .await?;
+
+    Ok(Redirect::to(authorize_url.as_str()))
 }
 
-type PageStore = HashMap<Uuid, Document>;
+async fn ensure_session_id(
+    State(app): State<Arc<App>>,
+    jar: CookieJar,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    mut request: Request,
+    next: Next,
+) -> Result<Response> {
+    let span = span!(Level::INFO, "ensure_session_id");
+    let guard = span.enter();
 
-struct App {
-    reloader: minijinja_autoreload::AutoReloader,
-    google_auth_client: BasicClient,
-    repository: Arc<Mutex<MemoryRepository>>,
-    documents: Arc<RwLock<PageStore>>,
+    let session_store = LibsqlSessionStore(app.db.connect()?);
+
+    let id = jar
+        .get("id")
+        .and_then(|cookie| Uuid::from_str(cookie.value()).ok());
+
+    info!("current session {id:?} for {addr:?}", id = id, addr = addr);
+
+    match id {
+        Some(id) if session_store.is_valid(id).await? => {
+            request.extensions_mut().insert(SessionId(id));
+            Ok((next.run(request).await).into_response())
+        }
+        Some(_) => {
+            warn!("found a invalid session for {addr:?}", addr = addr);
+            let jar = jar.remove(Cookie::from("id"));
+            Ok((jar, next.run(request).await).into_response())
+        }
+        _ => {
+            let jar = jar.remove(Cookie::from("id"));
+            let id = session_store.register().await?;
+            request.extensions_mut().insert(SessionId(id));
+
+            info!("session avaiable {id:?}", id = request.extensions_mut().get::<SessionId>().unwrap().0);
+
+
+            let cookie = Cookie::build(Cookie::new("id", id.to_string()))
+                .secure(true)
+                .http_only(true)
+                .same_site(SameSite::Lax)
+                .expires(Expiration::DateTime(
+                    OffsetDateTime::now_utc() + time::Duration::days(5),
+                ))
+                .path("/")
+                .build();
+
+            Ok((jar.add(cookie), next.run(request).await).into_response())
+        }
+    }
+}
+async fn logout(
+    State(app): State<Arc<App>>,
+    SessionId(id): SessionId,
+    jar: CookieJar,
+) -> Result<impl IntoResponse> {
+    let session_store = LibsqlSessionStore(app.db.connect()?);
+    session_store.deregister(id).await?;
+    let cookie = jar.get("id").unwrap().clone();
+    Ok((jar.remove(cookie), Redirect::to("/d/")))
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .without_time()
-        .with_max_level(LevelFilter::INFO)
-        .compact()
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_thread_names(true))
+        .with(EnvFilter::from_default_env())
         .init();
 
     if dotenv::dotenv().is_err() {
         info!("running without .env");
     }
 
-    let repo = Arc::from(Mutex::new(MemoryRepository::new()));
-    let docs = Arc::from(RwLock::new(PageStore::new()));
+    let config = Config {
+        oauth_google_client_id: env::var("OAUTH_GOOGLE_CLIENT_ID")?,
+        oauth_google_client_secret: env::var("OAUTH_GOOGLE_CLIENT_SECRET")?,
+        turso_url: env::var("TURSO_URL")?,
+        turso_token: env::var("TURSO_TOKEN")?,
+        hmac_key: env::var("HMAC_KEY")?,
+    };
+
+    let db = Arc::new(
+        libsql::Builder::new_remote_replica("replica.db", config.turso_url, config.turso_token)
+            .sync_interval(std::time::Duration::from_secs(1))
+            .read_your_writes(true)
+            .build()
+            .await?,
+    );
+
+    let repo = Arc::new(Mutex::new(LibsqlRepository::new(db.clone()).await?));
+    let docs = Arc::new(RwLock::new(PageStore::new()));
 
     for entry in WalkDir::new("content/")
         .into_iter()
@@ -412,35 +664,33 @@ async fn main() -> Result<()> {
     {
         let page = parse(entry.path(), repo.lock().await.deref_mut());
 
-        dbg!(&page.metadata.uuid);
-
         docs.write().await.insert(page.metadata.uuid, page);
     }
 
     let livereload = LiveReloadLayer::new();
-    let reloader = livereload.reloader();
 
-    let mut repo_ref = repo.clone();
-    let mut docs_ref = docs.clone();
-
-    let mut content_notifier =
-        notify::recommended_watcher(move |event: Result<notify::Event, notify::Error>| {
+    let mut content_notifier = notify::recommended_watcher({
+        let repo = Arc::clone(&repo);
+        let docs = Arc::clone(&docs);
+        let reloader = livereload.reloader();
+        move |event: Result<notify::Event, notify::Error>| {
             if let notify::Event {
                 kind: notify::EventKind::Modify(_),
                 paths,
                 attrs: _,
             } = event.unwrap()
             {
-                for page in docs_ref.blocking_write().values_mut() {
+                for page in docs.blocking_write().values_mut() {
                     if paths.contains(
                         &fs::canonicalize(&page.path).expect("content dir should be present"),
                     ) {
-                        *page = parse(page.path.clone(), repo_ref.blocking_lock().deref_mut());
+                        *page = parse(page.path.clone(), repo.blocking_lock().deref_mut());
                     }
                 }
                 reloader.reload()
             }
-        })?;
+        }
+    })?;
 
     content_notifier.watch(
         path::Path::new("content/"),
@@ -460,70 +710,85 @@ async fn main() -> Result<()> {
 
         let mut env = minijinja::Environment::new();
         env.set_loader(path_loader(path));
-        env.add_function("tag_color", tag_color);
+        env.add_function(
+            "tag_color",
+            |s: ViaDeserialize<String>, l: ViaDeserialize<f32>| -> String {
+                let mut hasher = DefaultHasher::new();
+                hasher.write(s.as_bytes());
+                let n = hasher.finish();
+
+                let a = (n.wrapping_shr(8 + 1) & 0xff) as u8;
+                let b = (n.wrapping_shr(2) & 0xff) as u8;
+                let lr = ((n & 0b1111) as i8 - 0b1000) as f32;
+
+                let r = 0.5;
+                let offset = r / 2.;
+
+                let a = (a as f32 / u8::MAX as f32) * r - offset;
+                let b = (b as f32 / u8::MAX as f32) * r - offset;
+
+                let c = oklab::oklab_to_srgb(oklab::Oklab {
+                    l: l.0 + lr * 0.01,
+                    a,
+                    b,
+                });
+
+                format!("{}", c)
+            },
+        );
 
         notifier.watch_path(path, true);
 
         Ok(env)
     });
 
-    let app = Router::new()
-        .fallback_service(Html("We are fucked OMG!!!").into_service())
-        .route("/login", get(login))
-        .route("/d/", get(documents))
-        .route("/d/:uuid", get(document))
-        .nest(
-            "/oauth",
-            Router::new().route("/google/callback", get(google_callback)),
-        )
-        .nest_service("/favicon.ico", ServeFile::new("assets/qed.ico"))
-        .nest_service("/assets", ServeDir::new("assets"))
-        .with_state(Arc::from(App {
-            repository: repo,
-            documents: docs,
-            reloader,
-            google_auth_client: {
-                let google_client_id = ClientId::new(env::var("OAUTH_GOOGLE_CLIENT_ID")?);
-                let google_client_secret =
-                    ClientSecret::new(env::var("OAUTH_GOOGLE_CLIENT_SECRET")?);
+    let state = Arc::from(App {
+        db,
+        repository: repo,
+        documents: docs,
+        reloader,
+        google_auth_client: {
+            let client_id = ClientId::new(config.oauth_google_client_id);
+            let client_secret = ClientSecret::new(config.oauth_google_client_secret);
+            let auth_url =
+                AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())?;
+            let token_url =
+                TokenUrl::new("https://www.googleapis.com/oauth2/v3/token".to_string())?;
 
-                let auth_url =
-                    AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())?;
-                let token_url =
-                    TokenUrl::new("https://www.googleapis.com/oauth2/v3/token".to_string())?;
-
-                BasicClient::new(
-                    google_client_id,
-                    Some(google_client_secret),
-                    auth_url,
-                    Some(token_url),
-                )
-                .set_redirect_uri(RedirectUrl::new(
-                    "http://localhost:3000/oauth/google/callback".to_string(),
-                )?)
+            BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url))
                 .set_revocation_uri(RevocationUrl::new(
                     "https://oauth2.googleapis.com/revoke".to_string(),
                 )?)
-            },
-        }))
-        .layer(Extension(Arc::from(jwt::Header::new(
-            jwt::Algorithm::HS384,
-        ))))
-        .layer(Extension(Arc::from(jwt::EncodingKey::from_base64_secret(
-            &env::var("HMAC_KEY")?,
-        )?)))
-        .layer(Extension(Arc::from(jwt::DecodingKey::from_base64_secret(
-            &env::var("HMAC_KEY")?,
-        )?)))
-        .layer(CatchPanicLayer::new())
+        },
+    });
+
+    let app = Router::new()
+        .fallback_service((StatusCode::NOT_FOUND, Html("404")).into_service())
+        .nest_service("/favicon.ico", ServeFile::new("assets/qed.ico"))
+        .nest_service("/assets", ServeDir::new("assets"))
+        .route("/oauth/google/callback", get(google_callback))
+        .route("/login", get(login))
+        .route("/logout", get(logout))
+        .route("/d", get(|| async { Redirect::permanent("/d/") }))
+        .route("/d/", get(document_list))
+        .route("/d/:uuid", get(document))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            ensure_session_id,
+        ))
         .layer(
             livereload.request_predicate(|req: &Request| !req.headers().contains_key("hx-request")),
         )
-        .layer(CompressionLayer::new().br(true));
+        // .layer(CatchPanicLayer::new())
+        .layer(CompressionLayer::new().br(true))
+        .layer(TimeoutLayer::new(std::time::Duration::from_secs(1)))
+        .with_state(state.clone());
 
-    let listener = TcpListener::bind("0.0.0.0:3000").await?;
+    let listener = TcpListener::bind("0.0.0.0:4000").await?;
 
-    axum::serve(listener, app).await?;
+    info!("{:?}", listener);
+
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
     Ok(())
 }

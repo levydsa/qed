@@ -18,7 +18,6 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 tower-livereload = { workspace = true }
 
-jsonwebtoken = { workspace = true }
 oauth2 = { workspace = true }
 reqwest = { workspace = true }
 
@@ -30,12 +29,18 @@ maud = { workspace = true }
 dotenv = { workspace = true }
 
 serde = { workspace = true }
+serde_json = { workspace = true }
 rand = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v5", "v4"] }
 
+libsql = { workspace = true }
+jotdown = { workspace = true }
+
+time = { workspace = true }
+
 minijinja = { version = "2.0.1", features = ["loader"] }
-jotdown.workspace = true
 minijinja-autoreload = "2.0.1"
+
 toml = "0.8.13"
 walkdir = "2.5.0"
 oklab = "1.0.1"

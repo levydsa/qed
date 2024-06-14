@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div
+  class="prose mx-auto max-w-[80ch] px-8 py-6 dark:prose-invert prose-ol:pl-2 prose-ul:pl-4 prose-li:pl-0 prose-img:mx-auto">
+  {% autoescape false %}{{ content }}{% endautoescape %}
+</div>
+{%- endblock -%}
+

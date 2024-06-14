@@ -1,0 +1,19 @@
+
+app = 'kill-ee-dee'
+primary_region = 'gig'
+
+[build]
+  image = 'registry.fly.io/kill-ee-dee:latest'
+
+[http_service]
+  protocol = 'tcp'
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1

@@ -75,15 +75,22 @@
 </svg>
 {% endmacro %}
 
+{% macro icon_logout() %}
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-auto fill-red-600 dark:fill-red-500">
+  <path fill-rule="evenodd" d="M17 4.25A2.25 2.25 0 0 0 14.75 2h-5.5A2.25 2.25 0 0 0 7 4.25v2a.75.75 0 0 0 1.5 0v-2a.75.75 0 0 1 .75-.75h5.5a.75.75 0 0 1 .75.75v11.5a.75.75 0 0 1-.75.75h-5.5a.75.75 0 0 1-.75-.75v-2a.75.75 0 0 0-1.5 0v2A2.25 2.25 0 0 0 9.25 18h5.5A2.25 2.25 0 0 0 17 15.75V4.25Z" clip-rule="evenodd" />
+  <path fill-rule="evenodd" d="M14 10a.75.75 0 0 0-.75-.75H3.704l1.048-.943a.75.75 0 1 0-1.004-1.114l-2.5 2.25a.75.75 0 0 0 0 1.114l2.5 2.25a.75.75 0 1 0 1.004-1.114l-1.048-.943h9.546A.75.75 0 0 0 14 10Z" clip-rule="evenodd" />
+</svg>
+{% endmacro %}
+
 {% macro header_bnt(label, hs) %}
 <button
-  class="flex h-8 w-8 items-center justify-center rounded-full border-2 border-zinc-200 shadow hover:bg-zinc-200 dark:border-zinc-800 dark:shadow-zinc-800 dark:hover:bg-zinc-800 "
+  class="flex h-8 w-8 items-center justify-center rounded-full border-2 border-zinc-200 shadow bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:border-zinc-800 dark:shadow-zinc-900 dark:hover:bg-zinc-800"
   type="button" aria-label="{{ lable }}" _="{{ hs }}">
   {{ caller() }}
 </button>
 {% endmacro %}
 
-<body class="mx-auto hyphens-auto text-justify dark:bg-black dark:text-slate-200 dark:[color-scheme:_dark] [will-change: transform-gpu]">
+<body class="snap-mandatory snap-y mx-auto hyphens-auto text-justify dark:bg-black dark:text-slate-200 dark:[color-scheme:_dark] [will-change: transform-gpu]">
   <dialog _="
     on popstate from window close() on me
 
@@ -105,7 +112,7 @@
   </dialog>
 
   <header
-    class="flex items-center gap-3 border-b border-b-zinc-200 px-3 py-3 shadow dark:border-b-zinc-800 dark:shadow-zinc-800">
+    class="flex items-center gap-3 border-b border-b-zinc-200 px-3 py-3 shadow dark:border-b-zinc-800 dark:shadow-zinc-800 snap-start">
     {% call header_bnt(
       label="go back",
       hs="
@@ -125,7 +132,30 @@
     <div class="m-auto"></div>
 
     {% if user_picture %}
-      <img src="{{ user_picture }}" alt="user icon" class="h-auto w-8 rounded-full" />
+      <div class="relative">
+        <div _="on click send toggle to the next <div/>">
+          <img src="{{ user_picture }}" alt="user icon" class="w-8 h-8 overflow-clip rounded-full border-2 border-zinc-200 dark:border-zinc-800" />
+        </div>
+
+        <div
+          _="
+            on toggle
+              if :visible then
+                set :visible to false
+                async transition opacity to 0 using '200ms ease-out'
+                async transition margin-top to 0 using '200ms ease-out'
+              else
+                set :visible to true
+                async transition opacity to 1 using '200ms ease-in'
+                async transition margin-top to 0.5rem using '200ms ease-in'
+              end
+          "
+          class="absolute outline-3 right-[-3px] bg-black/20 dark:bg-white/10 p-1 rounded-full outline-white space-y-2 transition-all opacity-0">
+          {% call header_bnt(label="logout", hs="on mousedown go to url /logout") %}
+          {{ icon_logout() }}
+          {% endcall %}
+        </div>
+      <div>
     {% else %}
       {% call header_bnt(label="login", hs="on mousedown go to url /login") %}
       {{ icon_user() }}
@@ -133,14 +163,8 @@
     {% endif %}
   </header>
 
-
   <main>
-    {% block body %}
-    <div
-      class="prose mx-auto max-w-[80ch] px-8 py-6 dark:prose-invert prose-ol:pl-2 prose-ul:pl-4 prose-li:pl-0 prose-img:mx-auto">
-      {% autoescape false %}{{ content }}{% endautoescape %}
-    </div>
-    {% endblock %}
+    {% block body %}{% endblock %}
   </main>
 
   <footer class="mt-10 h-20"></footer>
