@@ -22,6 +22,23 @@
         fileset = pkgs.lib.fileset;
         rust = pkgs.rust-bin.nightly.latest.default;
         craneLib = (crane.mkLib pkgs).overrideToolchain rust;
+        nodeModules = pkgs.buildNpmPackage {
+          name = "qed-web-node";
+          src = fileset.toSource {
+            root = ./.;
+            fileset = fileset.unions [
+              ./package.json
+              ./package-lock.json
+            ];
+          };
+
+          npmDepsHash = "sha256-FPngX8x71AW7Zvqs9LPVf1FuJEMt9FlxLnGzhtDBYf0=";
+          dontBuild = true;
+
+          installPhase = ''
+            cp -r node_modules $out/
+          '';
+        };
         fileSetForCrate = crate: fileset.toSource {
           root = ./.;
           fileset = fileset.unions [
@@ -56,7 +73,7 @@
             openssl
           ];
         };
-        packages.container = pkgs.dockerTools.buildImage rec {
+        packages.container = pkgs.dockerTools.buildImage {
           name = "qed-web";
           tag = packages.qed-web.version;
           created = "now";
@@ -75,51 +92,45 @@
                         root = ./.;
                         fileset = fileset.unions [
                           ./package.json
+                          ./package-lock.json
                           ./global.css
                           ./tailwind.config.js
                           ./justfile
                         ];
                       });
-                      buildInputs = with pkgs; [ coreutils just fd ];
+                      buildInputs = with pkgs; [ coreutils just fd nodejs_22 ];
                     }
                     (
-                      let
-                        nodeModules = pkgs.buildNpmPackage {
-                          inherit name;
-
-                          src = fileset.toSource {
-                            root = ./.;
-                            fileset = fileset.unions [
-                              ./package.json
-                              ./package-lock.json
-                            ];
-                          };
-
-                          npmDepsHash = "sha256-FPngX8x71AW7Zvqs9LPVf1FuJEMt9FlxLnGzhtDBYf0=";
-                          dontBuild = true;
-
-                          installPhase = ''
-                            cp -r node_modules $out/
-                          '';
-                        };
-                      in
                       # TODO: Make building the tailwind bundle a dependency too
                       ''
                         mkdir -p $out
+
                         ls -la ${nodeModules}
 
                         mkdir -p \
-                          $out/var/assets/js/ \
+                          $out/var/ \
+                          $out/var/assets/js/
+
+                        cp -R ${nodeModules}/.     $out/var/node_modules
+                        cp $src/package.json       $out/var/
+                        cp $src/package-lock.json  $out/var/
+                        cp $src/tailwind.config.js $out/var/
 
                         cp -r ${./assets}/.    $out/var/assets
                         cp -r ${./content}/.   $out/var/content
                         cp -r ${./templates}/. $out/var/templates
 
+                        cd $out/var/
+
+                        ls -la .
+                        npx tailwindcss -c tailwind.config.js -i ${./global.css} -o assets/tw.css
+
+                        cd $src
+
                         cp -r ${nodeModules}/htmx.org/dist/.        $out/var/assets/js
                         cp -r ${nodeModules}/hyperscript.org/dist/. $out/var/assets/js
                         cp -r ${nodeModules}/katex/dist/.           $out/var/assets/js
 
-                        tailwindcss -i ${./global.css} -o $out/var/assets/
                       ''
                     ))
                 )
