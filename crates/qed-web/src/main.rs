@@ -5,7 +5,9 @@
 use anyhow::anyhow;
 use axum::{
     async_trait,
-    extract::{ConnectInfo, FromRef, FromRequestParts, Host, OriginalUri, Path, Query, Request, State},
+    extract::{
+        ConnectInfo, FromRef, FromRequestParts, Host, OriginalUri, Path, Query, Request, State,
+    },
     handler::HandlerWithoutStateExt,
     http::{request::Parts, StatusCode},
     middleware::{self, Next},
@@ -32,7 +34,16 @@ use oauth2::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    collections::HashMap, convert::Infallible, env, fs, hash::{DefaultHasher, Hasher}, net::SocketAddr, ops::{Deref, DerefMut}, path::{self, PathBuf}, str::FromStr, sync::Arc, time::Instant
+    collections::HashMap,
+    convert::Infallible,
+    env, fs,
+    hash::{DefaultHasher, Hasher},
+    net::SocketAddr,
+    ops::{Deref, DerefMut},
+    path::{self, PathBuf},
+    str::FromStr,
+    sync::Arc,
+    time::Instant,
 };
 use time::OffsetDateTime;
 use tokio::{
@@ -41,19 +52,19 @@ use tokio::{
 };
 use tower::ServiceBuilder;
 use tower_http::{
-    timeout::TimeoutLayer,
     catch_panic::CatchPanicLayer,
     compression::CompressionLayer,
     services::{ServeDir, ServeFile},
+    timeout::TimeoutLayer,
 };
 use tower_livereload::LiveReloadLayer;
 use tracing::{info, level_filters::LevelFilter, span, trace, warn, Level};
-use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{
     filter::EnvFilter,
     fmt::{self, time::FormatTime},
     layer::SubscriberExt,
 };
+use tracing_subscriber::{filter::FilterFn, util::SubscriberInitExt};
 use uuid::{uuid, Uuid};
 use walkdir::WalkDir;
 
@@ -598,8 +609,10 @@ async fn ensure_session_id(
             let id = session_store.register().await?;
             request.extensions_mut().insert(SessionId(id));
 
-            info!("session avaiable {id:?}", id = request.extensions_mut().get::<SessionId>().unwrap().0);
-
+            info!(
+                "session avaiable {id:?}",
+                id = request.extensions_mut().get::<SessionId>().unwrap().0
+            );
 
             let cookie = Cookie::build(Cookie::new("id", id.to_string()))
                 .secure(true)
@@ -630,11 +643,17 @@ async fn logout(
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(fmt::layer().with_thread_names(true))
-        .with(EnvFilter::from_default_env())
+        .with(LevelFilter::INFO)
+        .with(FilterFn::new(|metadata| {
+            !matches!(
+                metadata.target(),
+                "libsql::replication::remote_client" | "libsql_replication::replicator",
+            )
+        }))
         .init();
 
     if dotenv::dotenv().is_err() {
-        info!("running without .env");
+        warn!("running without .env");
     }
 
     let config = Config {
@@ -788,7 +807,11 @@ async fn main() -> Result<()> {
 
     info!("{:?}", listener);
 
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
