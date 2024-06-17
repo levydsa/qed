@@ -1,4 +1,4 @@
-use crate::{async_trait, LibsqlValueExt};
+use crate::{async_trait, LibsqlValueRefExt};
 use ::libsql::params;
 use libsql::named_params;
 use std::{process::id, sync::Arc};
@@ -26,34 +26,35 @@ pub enum Error {
     Json(#[from] serde_json::Error),
 }
 
-use qed_core::{Auth, Comment, Commentable, Document, Question, User, UserError};
+use qed_core::{Auth, Comment, Commentable, Document, Question, RepositoryError, User};
 
 #[async_trait]
-impl qed_core::Repository for LibsqlRepository {
-    type Error = Error;
+impl qed_core::Repository<Error> for LibsqlRepository {
+    async fn register_user(&self, auth: Auth) -> Result<User, RepositoryError<Error>> {
+        let conn = self.db.connect().map_err(|err| Error::from(err))?;
 
-    async fn register_user(&mut self, auth: Auth) -> Result<Result<User, UserError>, Self::Error> {
-        let conn = self.db.connect()?;
-
-        Ok(match auth {
-            qed_core::Auth::GoogleOauth(google_user) => 'user: {
-                let user = User::new(
-                    Uuid::now_v7(),
-                    google_user.email.clone(),
-                    google_user.picture.clone(),
-                );
-
+        match auth {
+            qed_core::Auth::GoogleOauth(google_user) => {
                 let mut rows = conn
                     .query(
                         "SELECT count(*) FROM google_users WHERE sub = ?1",
                         params![google_user.sub.to_value()],
                     )
-                    .await?;
+                    .await
+                    .map_err(|err| Error::from(err))?;
 
-                let row = rows.next().await?.unwrap();
-                if row.get::<i64>(0)? != 0 {
-                    break 'user Err(qed_core::UserError::UserAlreadyExists);
+                let row = rows.next().await.map_err(|err| Error::from(err))?.unwrap();
+                if row.get::<i64>(0).map_err(|err| Error::from(err))? != 0 {
+                    return Err(qed_core::RepositoryError::UserAlreadyExists(
+                        qed_core::Auth::GoogleOauth(google_user),
+                    ));
                 };
+
+                let user = User::new(
+                    Uuid::now_v7(),
+                    google_user.email.clone(),
+                    google_user.picture.clone(),
+                );
 
                 conn.execute(
                     r#"
@@ -71,7 +72,8 @@ impl qed_core::Repository for LibsqlRepository {
                         ":email_verified": google_user.email_verified,
                     },
                 )
-                .await?;
+                .await
+                .map_err(|err| Error::from(err))?;
 
                 conn.execute(
                     r#"
@@ -86,7 +88,8 @@ impl qed_core::Repository for LibsqlRepository {
                         ":picture": user.picture.to_value(),
                     },
                 )
-                .await?;
+                .await
+                .map_err(|err| Error::from(err))?;
 
                 conn.execute(
                     r#"
@@ -102,21 +105,21 @@ impl qed_core::Repository for LibsqlRepository {
                     },
                 )
                 .await
-                .unwrap();
+                .map_err(|err| Error::from(err))?;
 
                 Ok(user)
             }
-        })
+        }
     }
 
-    async fn delete_user(&mut self, user: User) -> Result<(), Self::Error> {
+    async fn delete_user(&self, user: User) -> Result<(), RepositoryError<Error>> {
         todo!()
     }
 
-    async fn get_user_from_auth(&self, auth: Auth) -> Result<Result<User, UserError>, Self::Error> {
-        let conn = self.db.connect()?;
+    async fn get_user_from_auth(&self, auth: Auth) -> Result<User, RepositoryError<Error>> {
+        let conn = self.db.connect().map_err(|err| Error::from(err))?;
 
-        Ok(match auth {
+        match auth {
             qed_core::Auth::GoogleOauth(google_user) => {
                 let mut rows = conn
                     .query(
@@ -128,67 +131,71 @@ impl qed_core::Repository for LibsqlRepository {
                         "#,
                         params![google_user.sub.to_value()],
                     )
-                    .await?;
+                    .await
+                    .map_err(|err| Error::from(err))?;
 
-                if let Some(row) = rows.next().await? {
+                if let Some(row) = rows.next().await.map_err(|err| Error::from(err))? {
                     let id = row
-                        .get_value(0)?
+                        .get_value(0)
+                        .map_err(|err| Error::from(err))?
                         .as_blob()
                         .map(|v| Uuid::from_slice(v.as_slice()))
-                        .expect("field should be a uuid blob")?;
-                    let email = row.get_str(1)?.to_owned();
-                    let picture = row.get_str(2)?.to_owned();
+                        .expect("field should be a uuid blob")
+                        .map_err(|err| Error::from(err))?;
+                    let email = row.get_str(1).map_err(|err| Error::from(err))?.to_owned();
+                    let picture = row.get_str(2).map_err(|err| Error::from(err))?.to_owned();
 
                     Ok(User::new(id, email, picture))
                 } else {
-                    Err(UserError::UserNotFound)
+                    Err(RepositoryError::UserNotFound)
                 }
             }
-        })
+        }
     }
 
-    async fn get_user_from_id(&self, id: Uuid) -> Result<Result<User, UserError>, Self::Error> {
-        let conn = self.db.connect()?;
+    async fn get_user_from_id(&self, id: Uuid) -> Result<User, RepositoryError<Error>> {
+        let conn = self.db.connect().map_err(|err| Error::from(err))?;
 
-        Ok({
-            let mut rows = conn
-                .query(
-                    r#"
-                    SELECT id, email, picture
-                    FROM users
-                    WHERE id = ?1
-                    "#,
-                    params![id.to_value()],
-                )
-                .await?;
+        let mut rows = conn
+            .query(
+                r#"
+                SELECT id, email, picture
+                FROM users
+                WHERE id = ?1
+                "#,
+                params![id.to_value()],
+            )
+            .await
+            .map_err(|err| Error::from(err))?;
 
-            if let Some(row) = rows.next().await? {
-                let id = row
-                    .get_value(0)?
-                    .as_blob()
-                    .map(|v| Uuid::from_slice(v.as_slice()))
-                    .expect("field should be a uuid blob")?;
-                let email = row.get_str(1)?.to_owned();
-                let picture = row.get_str(2)?.to_owned();
+        if let Some(row) = rows.next().await.map_err(|err| Error::from(err))? {
+            let id = row
+                .get_value(0)
+                .map_err(|err| Error::from(err))?
+                .as_blob()
+                .map(|v| Uuid::from_slice(v.as_slice()))
+                .expect("field should be a uuid blob")
+                .map_err(|err| Error::from(err))?;
+            let email = row.get_str(1).map_err(|err| Error::from(err))?.to_owned();
+            let picture = row.get_str(2).map_err(|err| Error::from(err))?.to_owned();
 
-                Ok(User::new(id, email, picture))
-            } else {
-                Err(UserError::UserNotFound)
-            }
-        })
+            Ok(User::new(id, email, picture))
+        } else {
+            Err(RepositoryError::UserNotFound)
+        }
     }
 
-    async fn get_auth_from_user(&self, user: &User) -> Result<Auth, Self::Error> {
+    async fn get_auth_from_user(&self, user: &User) -> Result<Auth, RepositoryError<Error>> {
         todo!()
     }
 
     async fn add_question(
-        &mut self,
+        &self,
         document: &Document,
         position: u32,
         tags: Vec<String>,
-    ) -> Result<Question, Self::Error> {
-        let conn = self.db.connect()?;
+    ) -> Result<Question, RepositoryError<Error>> {
+        let conn = self.db.connect().map_err(|err| Error::from(err))?;
         let doc_id = document.id;
 
         let q = qed_core::Question {
@@ -212,27 +219,30 @@ impl qed_core::Repository for LibsqlRepository {
                 ":id": q.id.to_value(),
                 ":document_id": q.document_id.to_value(),
                 ":position": q.position,
-                ":tags": serde_json::to_string(&q.tags)?,
+                ":tags": serde_json::to_string(&q.tags).map_err(|err| Error::from(err))?,
             },
         );
 
         Ok(q)
     }
 
-    async fn get_question(&self, id: Uuid) -> Result<Question, Self::Error> {
+    async fn get_question(&self, id: Uuid) -> Result<Question, RepositoryError<Error>> {
         todo!()
     }
 
     async fn add_comment(
-        &mut self,
+        &self,
         parent: &Commentable,
         owner: &User,
         content: impl AsRef<str> + Send + Sync,
-    ) -> Result<Comment, Self::Error> {
+    ) -> Result<Comment, RepositoryError<Error>> {
         todo!()
     }
 
-    async fn get_comment_list(&self, parent: &Commentable) -> Result<Vec<Comment>, Self::Error> {
+    async fn get_comment_list(
+        &self,
+        parent: &Commentable,
+    ) -> Result<Vec<Comment>, RepositoryError<Error>> {
         todo!()
     }
 }

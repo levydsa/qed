@@ -2,6 +2,16 @@
 #![allow(unused)]
 #![feature(duration_constructors)]
 
+// NOTE: I want to be able to work under the assumption that a valid session_id always exists in
+// all observable ways, with the exception of ensure_session_id, which ensures that invariant.
+
+// NOTE: I've observed some weird behavior with the ensure_session_id middleware, it seems to get
+// called multiple times in a burst when getting called from a mobile browser. Maybe not a problem?
+// Investigation needed.
+
+// TODO: Add `Session` extractor that acts like `CookieJar` pass it like a resource and get it like
+// a resource. Very nice and rusty :P. :Basicaly, reimplement tower_sessions, but diferent.
+
 use anyhow::anyhow;
 use axum::{
     async_trait,
@@ -11,15 +21,18 @@ use axum::{
     handler::HandlerWithoutStateExt,
     http::{request::Parts, StatusCode},
     middleware::{self, Next},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, IntoResponseParts, Redirect, Response, ResponseParts},
     routing::get,
     Extension, Json, RequestExt, Router, ServiceExt,
 };
-use axum_extra::extract::{
-    cookie::{self, Cookie, Expiration, SameSite},
-    CookieJar,
+use axum_extra::{
+    extract::{
+        cookie::{self, Cookie, Expiration, SameSite},
+        CookieJar,
+    },
+    middleware::option_layer,
 };
-use extractors::SessionId;
+use extract::SessionId;
 use itertools::Itertools;
 use jotdown::Render;
 use lazy_static::lazy_static;
@@ -50,7 +63,7 @@ use tokio::{
     net::TcpListener,
     sync::{Mutex, RwLock},
 };
-use tower::ServiceBuilder;
+use tower::{Layer, ServiceBuilder};
 use tower_http::{
     catch_panic::CatchPanicLayer,
     compression::CompressionLayer,
@@ -68,14 +81,12 @@ use tracing_subscriber::{filter::FilterFn, util::SubscriberInitExt};
 use uuid::{uuid, Uuid};
 use walkdir::WalkDir;
 
-use qed_core::Repository;
+use qed_core::{Repository, User};
 
-mod extractors;
+mod extract;
 mod infra;
 
-use crate::extractors::User;
 use crate::infra::libsql::LibsqlRepository;
-use crate::infra::mem::MemoryRepository;
 
 struct Config {
     oauth_google_client_id: String,
@@ -84,7 +95,8 @@ struct Config {
     turso_url: String,
     turso_token: String,
 
-    hmac_key: String,
+    port: String,
+    debug: bool,
 }
 
 type PageStore = HashMap<Uuid, Document>;
@@ -97,24 +109,24 @@ struct App {
     documents: Arc<RwLock<PageStore>>,
 }
 
-pub trait LibsqlValueExt {
+pub trait LibsqlValueRefExt {
     fn to_value<'a>(&'a self) -> libsql::ValueRef<'a>;
 }
 
-impl LibsqlValueExt for Uuid {
+impl LibsqlValueRefExt for Uuid {
     fn to_value<'a>(&'a self) -> libsql::ValueRef<'a> {
         libsql::ValueRef::Blob(self.as_bytes())
     }
 }
 
-impl LibsqlValueExt for String {
+impl LibsqlValueRefExt for String {
     fn to_value<'a>(&'a self) -> libsql::ValueRef<'a> {
         libsql::ValueRef::Text(self.as_bytes())
     }
 }
 
 #[async_trait]
-trait SessionStore {
+trait SessionStore: Send + Sync {
     type Id;
     type Record;
     type Error;
@@ -138,6 +150,64 @@ impl From<SessionRecord> for libsql::Value {
     }
 }
 
+#[async_trait]
+impl<S> FromRequestParts<S> for SessionRecord
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let SessionId(id): SessionId = parts
+            .extensions
+            .get()
+            .cloned()
+            .expect("session id must be set");
+
+        let session_store: Arc<
+            dyn SessionStore<Id = Uuid, Record = SessionRecord, Error = SessionError>,
+        > = parts
+            .extensions
+            .get()
+            .cloned()
+            .expect("session store must be present, forgot to add?");
+
+        Ok(session_store
+            .get(id)
+            .await
+            .expect("ensure_session_id should make a valid id"))
+    }
+}
+
+impl IntoResponseParts for SessionRecord {
+    type Error = Infallible;
+
+    fn into_response_parts(
+        self,
+        res: ResponseParts,
+    ) -> Result<axum::response::ResponseParts, Self::Error> {
+        dbg!(&res);
+
+        let SessionId(id): SessionId = res
+            .extensions()
+            .get()
+            .cloned()
+            .expect("session id must be set");
+
+        let session_store: Arc<
+            dyn SessionStore<Id = Uuid, Record = SessionRecord, Error = SessionError>,
+        > = res
+            .extensions()
+            .get()
+            .cloned()
+            .expect("session store must be present, forgot to add?");
+
+        futures::executor::block_on(session_store.set(id, self)).unwrap();
+
+        Ok(res)
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 enum SessionError {
     #[error("session not found")]
@@ -153,7 +223,16 @@ enum SessionError {
     Other(#[from] anyhow::Error),
 }
 
-struct LibsqlSessionStore(libsql::Connection);
+#[derive(Clone)]
+struct LibsqlSessionStore {
+    db: Arc<libsql::Database>,
+}
+
+impl LibsqlSessionStore {
+    pub fn new(db: Arc<libsql::Database>) -> Self {
+        Self { db }
+    }
+}
 
 #[async_trait]
 impl SessionStore for LibsqlSessionStore {
@@ -162,8 +241,9 @@ impl SessionStore for LibsqlSessionStore {
     type Error = SessionError;
 
     async fn is_valid(&self, id: Self::Id) -> Result<bool, Self::Error> {
-        let mut rows = self
-            .0
+        let conn = self.db.connect()?;
+
+        let mut rows = conn
             .query(
                 "SELECT count(*) FROM sessions WHERE id = ?1",
                 [id.as_bytes().to_vec()],
@@ -176,8 +256,9 @@ impl SessionStore for LibsqlSessionStore {
     }
 
     async fn get(&self, id: Self::Id) -> Result<Self::Record, Self::Error> {
-        let mut rows = self
-            .0
+        let conn = self.db.connect()?;
+
+        let mut rows = conn
             .query(
                 "SELECT data FROM sessions WHERE id = ?1",
                 [id.as_bytes().as_ref()],
@@ -195,8 +276,9 @@ impl SessionStore for LibsqlSessionStore {
     }
 
     async fn set(&self, id: Self::Id, record: Self::Record) -> Result<(), Self::Error> {
-        let mut rows_changed = self
-            .0
+        let conn = self.db.connect()?;
+
+        let mut rows_changed = conn
             .execute(
                 "UPDATE sessions SET data = ?1 WHERE id = ?2",
                 libsql::params![record, id.as_bytes().as_ref()],
@@ -209,12 +291,12 @@ impl SessionStore for LibsqlSessionStore {
     }
 
     async fn register(&self) -> Result<Self::Id, Self::Error> {
+        let conn = self.db.connect()?;
         let id = Uuid::now_v7();
 
         info!("created another session {id}", id = id);
 
-        let mut rows_changed = self
-            .0
+        let mut rows_changed = conn
             .execute(
                 "INSERT INTO sessions (id) VALUES (?1)",
                 libsql::params![id.as_bytes().to_vec()],
@@ -226,10 +308,11 @@ impl SessionStore for LibsqlSessionStore {
     }
 
     async fn deregister(&self, id: Self::Id) -> Result<(), Self::Error> {
+        let conn = self.db.connect()?;
+
         info!("deleted session {id}", id = id);
 
-        let mut rows_changed = self
-            .0
+        let mut rows_changed = conn
             .execute(
                 "DELETE FROM sessions WHERE id = ?1",
                 libsql::params![id.as_bytes().to_vec()],
@@ -242,7 +325,7 @@ impl SessionStore for LibsqlSessionStore {
     }
 }
 
-const CSRF_STATE_KEY: &str = "csrf_state";
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(thiserror::Error, Debug)]
 enum Error {
@@ -280,10 +363,7 @@ enum Error {
     Session(#[from] SessionError),
 
     #[error(transparent)]
-    MemoryRepository(#[from] infra::mem::Error),
-
-    #[error(transparent)]
-    LibsqlRepository(#[from] infra::libsql::Error),
+    LibsqlRepository(#[from] qed_core::RepositoryError<infra::libsql::Error>),
 
     #[error("Invalid CSRF state, found `{found}` (expected `{expected}`)")]
     InvalidCsrf { expected: String, found: String },
@@ -309,7 +389,10 @@ fn host_to_callback(Host(host): Host, path: impl AsRef<str>) -> String {
     }
 }
 
-fn parse(path: impl AsRef<path::Path>, repo: &mut impl qed_core::Repository) -> Document {
+fn parse<E: std::error::Error>(
+    path: impl AsRef<path::Path>,
+    repo: &mut impl qed_core::Repository<E>,
+) -> Document {
     use jotdown::{Container as C, Event as E};
 
     let input = String::from_utf8(fs::read(path.as_ref()).unwrap()).unwrap();
@@ -405,13 +488,11 @@ fn parse(path: impl AsRef<path::Path>, repo: &mut impl qed_core::Repository) -> 
     }
 }
 
-type Result<T, E = Error> = std::result::Result<T, E>;
-
 #[axum_macros::debug_handler]
 async fn document(
     State(app): State<Arc<App>>,
     Path(uuid): Path<Uuid>,
-    User(user): extractors::User,
+    extract::User(user): extract::User,
 ) -> Result<impl IntoResponse> {
     let docs = app.documents.read().await;
     let document = docs.get(&uuid).unwrap();
@@ -427,7 +508,7 @@ async fn document(
 
 async fn document_list(
     State(app): State<Arc<App>>,
-    User(user): extractors::User,
+    extract::User(user): extract::User,
 ) -> Result<impl IntoResponse> {
     let docs = app.documents.read().await;
     let repo = app.repository.lock().await;
@@ -476,7 +557,7 @@ async fn google_callback(
     host: Host,
     req: Request,
 ) -> Result<impl IntoResponse> {
-    let session_store = LibsqlSessionStore(app.db.connect()?);
+    let session_store = LibsqlSessionStore::new(Arc::clone(&app.db));
 
     let code = AuthorizationCode::new(params.code);
 
@@ -516,18 +597,12 @@ async fn google_callback(
 
     let mut repo = app.repository.lock().await;
 
-    use qed_core::UserError as UE;
+    use qed_core::RepositoryError as UE;
 
-    let user = repo.register_user(auth.clone()).await?;
-    let user = match user {
+    let user = match repo.register_user(auth).await {
         Ok(user) => user,
-        Err(err) => match err {
-            UE::UserAlreadyExists => repo
-                .get_user_from_auth(auth.clone())
-                .await?
-                .expect("if user already exists, this is unreachable"),
-            UE::UserNotFound => unreachable!(),
-        },
+        Err(UE::UserAlreadyExists(auth)) => User::from_auth(auth, repo.deref()).await?,
+        Err(err) => return Err(err.into()),
     };
 
     session_store
@@ -546,6 +621,7 @@ async fn google_callback(
 async fn login(
     State(app): State<Arc<App>>,
     SessionId(id): SessionId,
+    record: SessionRecord,
     host: Host,
 ) -> Result<impl IntoResponse> {
     let (authorize_url, csrf_state) = app
@@ -561,19 +637,15 @@ async fn login(
         .add_scope(Scope::new("openid".to_string()))
         .url();
 
-    let session_store = LibsqlSessionStore(app.db.connect()?);
-    let record = session_store.get(id).await?;
-    session_store
-        .set(
-            id,
-            SessionRecord {
-                csrf_state: Some(csrf_state.secret().to_owned()),
-                ..record
-            },
-        )
-        .await?;
+    let session_store = LibsqlSessionStore::new(Arc::clone(&app.db));
 
-    Ok(Redirect::to(authorize_url.as_str()))
+    Ok((
+        SessionRecord {
+            csrf_state: Some(csrf_state.secret().to_owned()),
+            ..record
+        },
+        Redirect::to(authorize_url.as_str()),
+    ))
 }
 
 async fn ensure_session_id(
@@ -586,7 +658,7 @@ async fn ensure_session_id(
     let span = span!(Level::INFO, "ensure_session_id");
     let guard = span.enter();
 
-    let session_store = LibsqlSessionStore(app.db.connect()?);
+    let session_store = LibsqlSessionStore::new(Arc::clone(&app.db));
 
     let id = jar
         .get("id")
@@ -633,7 +705,7 @@ async fn logout(
     SessionId(id): SessionId,
     jar: CookieJar,
 ) -> Result<impl IntoResponse> {
-    let session_store = LibsqlSessionStore(app.db.connect()?);
+    let session_store = LibsqlSessionStore::new(Arc::clone(&app.db));
     session_store.deregister(id).await?;
     let cookie = jar.get("id").unwrap().clone();
     Ok((jar.remove(cookie), Redirect::to("/d/")))
@@ -661,7 +733,8 @@ async fn main() -> Result<()> {
         oauth_google_client_secret: env::var("OAUTH_GOOGLE_CLIENT_SECRET")?,
         turso_url: env::var("TURSO_URL")?,
         turso_token: env::var("TURSO_TOKEN")?,
-        hmac_key: env::var("HMAC_KEY")?,
+        port: "4000".to_string(),
+        debug: env::var("ENV") == Ok("".to_string()),
     };
 
     let db = Arc::new(
@@ -686,12 +759,9 @@ async fn main() -> Result<()> {
         docs.write().await.insert(page.metadata.uuid, page);
     }
 
-    let livereload = LiveReloadLayer::new();
-
     let mut content_notifier = notify::recommended_watcher({
         let repo = Arc::clone(&repo);
         let docs = Arc::clone(&docs);
-        let reloader = livereload.reloader();
         move |event: Result<notify::Event, notify::Error>| {
             if let notify::Event {
                 kind: notify::EventKind::Modify(_),
@@ -706,7 +776,6 @@ async fn main() -> Result<()> {
                         *page = parse(page.path.clone(), repo.blocking_lock().deref_mut());
                     }
                 }
-                reloader.reload()
             }
         }
     })?;
@@ -792,18 +861,20 @@ async fn main() -> Result<()> {
         .route("/d/", get(document_list))
         .route("/d/:uuid", get(document))
         .layer(middleware::from_fn_with_state(
-            state.clone(),
+            Arc::clone(&state),
             ensure_session_id,
         ))
-        .layer(
-            livereload.request_predicate(|req: &Request| !req.headers().contains_key("hx-request")),
-        )
         // .layer(CatchPanicLayer::new())
+        .layer(Extension::<
+            Arc<dyn SessionStore<Id = Uuid, Record = SessionRecord, Error = SessionError>>,
+        >(Arc::from(LibsqlSessionStore::new(Arc::clone(
+            &state.db,
+        )))))
         .layer(CompressionLayer::new().br(true))
         .layer(TimeoutLayer::new(std::time::Duration::from_secs(1)))
-        .with_state(state.clone());
+        .with_state(Arc::clone(&state));
 
-    let listener = TcpListener::bind("0.0.0.0:4000").await?;
+    let listener = TcpListener::bind(format!("0.0.0.0:{port}", port = config.port)).await?;
 
     info!("{:?}", listener);
 

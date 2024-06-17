@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{error::Error, sync::Arc};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -78,16 +78,34 @@ impl User {
     pub fn new(id: Uuid, email: String, picture: String) -> Self {
         Self { id, email, picture }
     }
-    pub async fn create_comment<E>(
+
+    pub async fn from_id<E: Error>(
+        id: Uuid,
+        repo: &impl Repository<E>,
+    ) -> Result<User, RepositoryError<E>> {
+        repo.get_user_from_id(id).await
+    }
+
+    pub async fn from_auth<E: Error>(
+        auth: Auth,
+        repo: &impl Repository<E>,
+    ) -> Result<User, RepositoryError<E>> {
+        repo.get_user_from_auth(auth).await
+    }
+
+    pub async fn create_comment<E: Error>(
         &self,
-        repo: &mut impl Repository<Error = E>,
+        repo: &impl Repository<E>,
         parent: &Commentable,
         content: impl AsRef<str> + Send + Sync,
-    ) -> Result<Comment, E> {
+    ) -> Result<Comment, RepositoryError<E>> {
         repo.add_comment(parent, self, content).await
     }
 
-    pub async fn auth<E>(&self, repo: &mut impl Repository<Error = E>) -> Result<Auth, E> {
+    pub async fn auth<E: Error>(
+        &self,
+        repo: &impl Repository<E>,
+    ) -> Result<Auth, RepositoryError<E>> {
         repo.get_auth_from_user(self).await
     }
 }
@@ -104,43 +122,50 @@ pub struct GoogleUser {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum UserError {
+pub enum RepositoryError<E: Error> {
     #[error("user already exists")]
-    UserAlreadyExists,
+    UserAlreadyExists(Auth),
 
     #[error("user doesn't exists")]
     UserNotFound,
+
+    #[error(transparent)]
+    Other(#[from] E),
 }
 
-#[async_trait]
-pub trait Repository {
-    type Error;
+/// For the sake of generality, pass a ref to self all the time. Need mutability?
+/// [`RefCell`](std::cell::RefCell)  is your friend.
 
-    async fn register_user(&mut self, auth: Auth) -> Result<Result<User, UserError>, Self::Error>;
-    async fn delete_user(&mut self, user: User) -> Result<(), Self::Error>;
+#[async_trait]
+pub trait Repository<E: Error> {
+    async fn register_user(&self, auth: Auth) -> Result<User, RepositoryError<E>>;
+    async fn delete_user(&self, user: User) -> Result<(), RepositoryError<E>>;
 
     /// Get user handle from auth info. The return type is wrapped in two Result to provide fine
     /// grained resolution of errors. `Result<User, UserError>' might be in the future just a enum
     /// with the variants as the possible cases, but from the function name, returning a error on
     /// anything else then return a `User` struct sounds like a error.
-    async fn get_user_from_auth(&self, auth: Auth) -> Result<Result<User, UserError>, Self::Error>;
-    async fn get_user_from_id(&self, id: Uuid) -> Result<Result<User, UserError>, Self::Error>;
+    async fn get_user_from_auth(&self, auth: Auth) -> Result<User, RepositoryError<E>>;
+    async fn get_user_from_id(&self, id: Uuid) -> Result<User, RepositoryError<E>>;
 
-    async fn get_auth_from_user(&self, user: &User) -> Result<Auth, Self::Error>;
+    async fn get_auth_from_user(&self, user: &User) -> Result<Auth, RepositoryError<E>>;
 
     async fn add_question(
-        &mut self,
+        &self,
         document: &Document,
         position: u32,
         tags: Vec<String>,
-    ) -> Result<Question, Self::Error>;
-    async fn get_question(&self, id: Uuid) -> Result<Question, Self::Error>;
+    ) -> Result<Question, RepositoryError<E>>;
+    async fn get_question(&self, id: Uuid) -> Result<Question, RepositoryError<E>>;
 
     async fn add_comment(
-        &mut self,
+        &self,
         parent: &Commentable,
         owner: &User,
         content: impl AsRef<str> + Send + Sync,
-    ) -> Result<Comment, Self::Error>;
-    async fn get_comment_list(&self, parent: &Commentable) -> Result<Vec<Comment>, Self::Error>;
+    ) -> Result<Comment, RepositoryError<E>>;
+    async fn get_comment_list(
+        &self,
+        parent: &Commentable,
+    ) -> Result<Vec<Comment>, RepositoryError<E>>;
 }

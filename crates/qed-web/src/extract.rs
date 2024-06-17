@@ -14,7 +14,7 @@ use axum_extra::extract::{
 use futures::future::OptionFuture;
 use qed_core::Repository;
 use serde::de::IntoDeserializer;
-use std::{str::FromStr, sync::Arc};
+use std::{ops::Deref, str::FromStr, sync::Arc};
 use uuid::Uuid;
 
 pub struct User(pub Option<qed_core::User>);
@@ -25,10 +25,7 @@ pub enum UserRejection {
     Session(#[from] self::SessionIdRejection),
 
     #[error(transparent)]
-    MemoryRepository(#[from] infra::mem::Error),
-
-    #[error(transparent)]
-    LibsqlRepository(#[from] infra::libsql::Error),
+    LibsqlRepository(#[from] qed_core::RepositoryError<infra::libsql::Error>),
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -58,13 +55,13 @@ where
         let mut repo = app.repository.lock().await;
 
         let SessionId(id) = SessionId::from_request_parts(parts, state).await.unwrap();
-        let session_store = LibsqlSessionStore(app.db.connect().unwrap());
+        let session_store = LibsqlSessionStore::new(Arc::clone(&app.db));
         let record = session_store.get(id).await.expect("ensure_session_id should make a valid id :)");
 
         // TODO: I really want to use `and_then`, but it does not accept a async closure.
         // Function coloring sucks balls.
         Ok(User(match record.user_id {
-            Some(id) => repo.get_user_from_id(id).await?.ok(),
+            Some(id) => qed_core::User::from_id(id, repo.deref()).await.ok(),
             None => None,
         }))
     }
