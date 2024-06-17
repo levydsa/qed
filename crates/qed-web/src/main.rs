@@ -184,25 +184,10 @@ impl IntoResponseParts for SessionRecord {
 
     fn into_response_parts(
         self,
-        res: ResponseParts,
+        mut res: ResponseParts,
     ) -> Result<axum::response::ResponseParts, Self::Error> {
+        res.extensions_mut().insert(self);
         dbg!(&res);
-
-        let SessionId(id): SessionId = res
-            .extensions()
-            .get()
-            .cloned()
-            .expect("session id must be set");
-
-        let session_store: Arc<
-            dyn SessionStore<Id = Uuid, Record = SessionRecord, Error = SessionError>,
-        > = res
-            .extensions()
-            .get()
-            .cloned()
-            .expect("session store must be present, forgot to add?");
-
-        futures::executor::block_on(session_store.set(id, self)).unwrap();
 
         Ok(res)
     }
@@ -554,15 +539,11 @@ async fn google_callback(
     State(app): State<Arc<App>>,
     Query(params): Query<Params>,
     SessionId(id): SessionId,
+    record: SessionRecord,
     host: Host,
     req: Request,
 ) -> Result<impl IntoResponse> {
-    let session_store = LibsqlSessionStore::new(Arc::clone(&app.db));
-
     let code = AuthorizationCode::new(params.code);
-
-    let record = session_store.get(id).await?;
-
     let expected_state = record.csrf_state.clone().unwrap_or("".to_string());
 
     if expected_state != params.state {
@@ -605,17 +586,14 @@ async fn google_callback(
         Err(err) => return Err(err.into()),
     };
 
-    session_store
-        .set(
-            id,
-            SessionRecord {
-                user_id: Some(user.id),
-                ..record
-            },
-        )
-        .await?;
-
-    Ok(Redirect::to("/d"))
+    Ok((
+        SessionRecord {
+            user_id: Some(user.id),
+            csrf_state: None,
+            ..record
+        },
+        Redirect::to("/d"),
+    ))
 }
 
 async fn login(
@@ -637,8 +615,6 @@ async fn login(
         .add_scope(Scope::new("openid".to_string()))
         .url();
 
-    let session_store = LibsqlSessionStore::new(Arc::clone(&app.db));
-
     Ok((
         SessionRecord {
             csrf_state: Some(csrf_state.secret().to_owned()),
@@ -658,7 +634,11 @@ async fn ensure_session_id(
     let span = span!(Level::INFO, "ensure_session_id");
     let guard = span.enter();
 
-    let session_store = LibsqlSessionStore::new(Arc::clone(&app.db));
+    let session_store = request
+        .extensions()
+        .get::<Arc<dyn SessionStore<Id = Uuid, Record = SessionRecord, Error = SessionError>>>()
+        .cloned()
+        .expect("session_store must exist");
 
     let id = jar
         .get("id")
@@ -666,15 +646,10 @@ async fn ensure_session_id(
 
     info!("current session {id:?} for {addr:?}", id = id, addr = addr);
 
-    match id {
+    let jar = match id {
         Some(id) if session_store.is_valid(id).await? => {
             request.extensions_mut().insert(SessionId(id));
-            Ok((next.run(request).await).into_response())
-        }
-        Some(_) => {
-            warn!("found a invalid session for {addr:?}", addr = addr);
-            let jar = jar.remove(Cookie::from("id"));
-            Ok((jar, next.run(request).await).into_response())
+            jar
         }
         _ => {
             let jar = jar.remove(Cookie::from("id"));
@@ -696,19 +671,37 @@ async fn ensure_session_id(
                 .path("/")
                 .build();
 
-            Ok((jar.add(cookie), next.run(request).await).into_response())
+            jar.add(cookie)
         }
+    };
+
+    let SessionId(id) = request
+        .extensions_mut()
+        .get::<SessionId>()
+        .cloned()
+        .unwrap();
+
+    let response = next.run(request).await;
+
+    if let Some(record) = response.extensions().get::<SessionRecord>() {
+        session_store.set(id.to_owned(), record.to_owned()).await?;
     }
+
+    Ok((jar, response).into_response())
 }
 async fn logout(
     State(app): State<Arc<App>>,
     SessionId(id): SessionId,
     jar: CookieJar,
+    record: SessionRecord,
 ) -> Result<impl IntoResponse> {
-    let session_store = LibsqlSessionStore::new(Arc::clone(&app.db));
-    session_store.deregister(id).await?;
-    let cookie = jar.get("id").unwrap().clone();
-    Ok((jar.remove(cookie), Redirect::to("/d/")))
+    Ok((
+        SessionRecord {
+            user_id: None,
+            ..record
+        },
+        Redirect::to("/d/"),
+    ))
 }
 
 #[tokio::main]

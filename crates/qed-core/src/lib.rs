@@ -122,7 +122,7 @@ pub struct GoogleUser {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum RepositoryError<E: Error> {
+pub enum RepositoryError<E: std::error::Error> {
     #[error("user already exists")]
     UserAlreadyExists(Auth),
 
