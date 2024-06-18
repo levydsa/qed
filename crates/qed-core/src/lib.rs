@@ -81,21 +81,21 @@ impl User {
 
     pub async fn from_id<E: Error>(
         id: Uuid,
-        repo: &impl Repository<E>,
+        repo: &impl Repository<Error = E>,
     ) -> Result<User, RepositoryError<E>> {
         repo.get_user_from_id(id).await
     }
 
     pub async fn from_auth<E: Error>(
         auth: Auth,
-        repo: &impl Repository<E>,
+        repo: &impl Repository<Error = E>,
     ) -> Result<User, RepositoryError<E>> {
         repo.get_user_from_auth(auth).await
     }
 
     pub async fn create_comment<E: Error>(
         &self,
-        repo: &impl Repository<E>,
+        repo: &impl Repository<Error = E>,
         parent: &Commentable,
         content: impl AsRef<str> + Send + Sync,
     ) -> Result<Comment, RepositoryError<E>> {
@@ -104,7 +104,7 @@ impl User {
 
     pub async fn auth<E: Error>(
         &self,
-        repo: &impl Repository<E>,
+        repo: &impl Repository<Error = E>,
     ) -> Result<Auth, RepositoryError<E>> {
         repo.get_auth_from_user(self).await
     }
@@ -137,35 +137,37 @@ pub enum RepositoryError<E: std::error::Error> {
 /// [`RefCell`](std::cell::RefCell)  is your friend.
 
 #[async_trait]
-pub trait Repository<E: Error> {
-    async fn register_user(&self, auth: Auth) -> Result<User, RepositoryError<E>>;
-    async fn delete_user(&self, user: User) -> Result<(), RepositoryError<E>>;
+pub trait Repository {
+    type Error: std::error::Error;
+
+    async fn register_user(&self, auth: Auth) -> Result<User, RepositoryError<Self::Error>>;
+    async fn delete_user(&self, user: User) -> Result<(), RepositoryError<Self::Error>>;
 
     /// Get user handle from auth info. The return type is wrapped in two Result to provide fine
     /// grained resolution of errors. `Result<User, UserError>' might be in the future just a enum
     /// with the variants as the possible cases, but from the function name, returning a error on
     /// anything else then return a `User` struct sounds like a error.
-    async fn get_user_from_auth(&self, auth: Auth) -> Result<User, RepositoryError<E>>;
-    async fn get_user_from_id(&self, id: Uuid) -> Result<User, RepositoryError<E>>;
+    async fn get_user_from_auth(&self, auth: Auth) -> Result<User, RepositoryError<Self::Error>>;
+    async fn get_user_from_id(&self, id: Uuid) -> Result<User, RepositoryError<Self::Error>>;
 
-    async fn get_auth_from_user(&self, user: &User) -> Result<Auth, RepositoryError<E>>;
+    async fn get_auth_from_user(&self, user: &User) -> Result<Auth, RepositoryError<Self::Error>>;
 
     async fn add_question(
         &self,
         document: &Document,
         position: u32,
         tags: Vec<String>,
-    ) -> Result<Question, RepositoryError<E>>;
-    async fn get_question(&self, id: Uuid) -> Result<Question, RepositoryError<E>>;
+    ) -> Result<Question, RepositoryError<Self::Error>>;
+    async fn get_question(&self, id: Uuid) -> Result<Question, RepositoryError<Self::Error>>;
 
     async fn add_comment(
         &self,
         parent: &Commentable,
         owner: &User,
         content: impl AsRef<str> + Send + Sync,
-    ) -> Result<Comment, RepositoryError<E>>;
+    ) -> Result<Comment, RepositoryError<Self::Error>>;
     async fn get_comment_list(
         &self,
         parent: &Commentable,
-    ) -> Result<Vec<Comment>, RepositoryError<E>>;
+    ) -> Result<Vec<Comment>, RepositoryError<Self::Error>>;
 }

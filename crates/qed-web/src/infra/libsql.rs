@@ -29,8 +29,10 @@ pub enum Error {
 use qed_core::{Auth, Comment, Commentable, Document, Question, RepositoryError, User};
 
 #[async_trait]
-impl qed_core::Repository<Error> for LibsqlRepository {
-    async fn register_user(&self, auth: Auth) -> Result<User, RepositoryError<Error>> {
+impl qed_core::Repository for LibsqlRepository {
+    type Error = Error;
+
+    async fn register_user(&self, auth: Auth) -> Result<User, RepositoryError<Self::Error>> {
         let conn = self.db.connect().map_err(|err| Error::from(err))?;
 
         match auth {
@@ -112,11 +114,11 @@ impl qed_core::Repository<Error> for LibsqlRepository {
         }
     }
 
-    async fn delete_user(&self, user: User) -> Result<(), RepositoryError<Error>> {
+    async fn delete_user(&self, user: User) -> Result<(), RepositoryError<Self::Error>> {
         todo!()
     }
 
-    async fn get_user_from_auth(&self, auth: Auth) -> Result<User, RepositoryError<Error>> {
+    async fn get_user_from_auth(&self, auth: Auth) -> Result<User, RepositoryError<Self::Error>> {
         let conn = self.db.connect().map_err(|err| Error::from(err))?;
 
         match auth {
@@ -153,7 +155,7 @@ impl qed_core::Repository<Error> for LibsqlRepository {
         }
     }
 
-    async fn get_user_from_id(&self, id: Uuid) -> Result<User, RepositoryError<Error>> {
+    async fn get_user_from_id(&self, id: Uuid) -> Result<User, RepositoryError<Self::Error>> {
         let conn = self.db.connect().map_err(|err| Error::from(err))?;
 
         let mut rows = conn
@@ -185,7 +187,7 @@ impl qed_core::Repository<Error> for LibsqlRepository {
         }
     }
 
-    async fn get_auth_from_user(&self, user: &User) -> Result<Auth, RepositoryError<Error>> {
+    async fn get_auth_from_user(&self, user: &User) -> Result<Auth, RepositoryError<Self::Error>> {
         todo!()
     }
 
@@ -194,7 +196,7 @@ impl qed_core::Repository<Error> for LibsqlRepository {
         document: &Document,
         position: u32,
         tags: Vec<String>,
-    ) -> Result<Question, RepositoryError<Error>> {
+    ) -> Result<Question, RepositoryError<Self::Error>> {
         let conn = self.db.connect().map_err(|err| Error::from(err))?;
         let doc_id = document.id;
 
@@ -226,7 +228,7 @@ impl qed_core::Repository<Error> for LibsqlRepository {
         Ok(q)
     }
 
-    async fn get_question(&self, id: Uuid) -> Result<Question, RepositoryError<Error>> {
+    async fn get_question(&self, id: Uuid) -> Result<Question, RepositoryError<Self::Error>> {
         todo!()
     }
 
@@ -235,14 +237,14 @@ impl qed_core::Repository<Error> for LibsqlRepository {
         parent: &Commentable,
         owner: &User,
         content: impl AsRef<str> + Send + Sync,
-    ) -> Result<Comment, RepositoryError<Error>> {
+    ) -> Result<Comment, RepositoryError<Self::Error>> {
         todo!()
     }
 
     async fn get_comment_list(
         &self,
         parent: &Commentable,
-    ) -> Result<Vec<Comment>, RepositoryError<Error>> {
+    ) -> Result<Vec<Comment>, RepositoryError<Self::Error>> {
         todo!()
     }
 }

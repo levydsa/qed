@@ -85,6 +85,7 @@ use qed_core::{Repository, User};
 
 mod extract;
 mod infra;
+mod session;
 
 use crate::infra::libsql::LibsqlRepository;
 
@@ -376,7 +377,7 @@ fn host_to_callback(Host(host): Host, path: impl AsRef<str>) -> String {
 
 fn parse<E: std::error::Error>(
     path: impl AsRef<path::Path>,
-    repo: &mut impl qed_core::Repository<E>,
+    repo: &mut impl qed_core::Repository<Error = E>,
 ) -> Document {
     use jotdown::{Container as C, Event as E};
 
@@ -474,6 +475,16 @@ fn parse<E: std::error::Error>(
 }
 
 #[axum_macros::debug_handler]
+async fn not_found(State(app): State<Arc<App>>) -> Result<impl IntoResponse> {
+    let env = app.reloader.acquire_env().unwrap();
+
+    Ok((
+        StatusCode::NOT_FOUND,
+        Html(env.get_template("not_found.html")?.render(context! {})?),
+    ))
+}
+
+#[axum_macros::debug_handler]
 async fn document(
     State(app): State<Arc<App>>,
     Path(uuid): Path<Uuid>,
@@ -491,6 +502,7 @@ async fn document(
     })?))
 }
 
+#[axum_macros::debug_handler]
 async fn document_list(
     State(app): State<Arc<App>>,
     extract::User(user): extract::User,
@@ -844,7 +856,7 @@ async fn main() -> Result<()> {
     });
 
     let app = Router::new()
-        .fallback_service((StatusCode::NOT_FOUND, Html("404")).into_service())
+        .fallback(get(not_found))
         .nest_service("/favicon.ico", ServeFile::new("assets/qed.ico"))
         .nest_service("/assets", ServeDir::new("assets"))
         .route("/oauth/google/callback", get(google_callback))
