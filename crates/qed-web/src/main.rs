@@ -1,6 +1,5 @@
-#![allow(dead_code)]
-#![allow(unused)]
 #![feature(duration_constructors)]
+#![allow(dead_code)]
 
 // NOTE: I want to be able to work under the assumption that a valid session_id always exists in
 // all observable ways, with the exception of ensure_session_id, which ensures that invariant.
@@ -15,37 +14,27 @@
 use anyhow::anyhow;
 use axum::{
     async_trait,
-    extract::{
-        ConnectInfo, FromRef, FromRequestParts, Host, OriginalUri, Path, Query, Request, State,
-    },
-    handler::HandlerWithoutStateExt,
+    extract::{ConnectInfo, FromRequestParts, Host, Path, Query, Request, State},
     http::{request::Parts, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, IntoResponseParts, Redirect, Response, ResponseParts},
     routing::get,
-    Extension, Json, RequestExt, Router, ServiceExt,
+    Extension, Router,
 };
-use axum_extra::{
-    extract::{
-        cookie::{self, Cookie, Expiration, SameSite},
-        CookieJar,
-    },
-    middleware::option_layer,
+use axum_extra::extract::{
+    cookie::{Cookie, Expiration, SameSite},
+    CookieJar,
 };
 use extract::SessionId;
-use itertools::Itertools;
+use futures::executor::block_on;
 use jotdown::Render;
-use lazy_static::lazy_static;
 use minijinja::{context, path_loader, value::ViaDeserialize};
 use notify::Watcher;
 use oauth2::{
-    basic::{BasicClient, BasicErrorResponseType},
-    reqwest::async_http_client,
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl, RevocationUrl,
-    Scope, StandardErrorResponse, TokenResponse, TokenUrl,
+    basic::BasicClient, reqwest::async_http_client, AuthUrl, AuthorizationCode, ClientId,
+    ClientSecret, CsrfToken, RedirectUrl, RevocationUrl, Scope, TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::{
     collections::HashMap,
     convert::Infallible,
@@ -63,22 +52,18 @@ use tokio::{
     net::TcpListener,
     sync::{Mutex, RwLock},
 };
-use tower::{Layer, ServiceBuilder};
 use tower_http::{
-    catch_panic::CatchPanicLayer,
     compression::CompressionLayer,
     services::{ServeDir, ServeFile},
     timeout::TimeoutLayer,
 };
-use tower_livereload::LiveReloadLayer;
-use tracing::{info, level_filters::LevelFilter, span, trace, warn, Level};
+use tracing::{info, level_filters::LevelFilter, span, warn, Level};
+use tracing_subscriber::{filter::FilterFn, util::SubscriberInitExt};
 use tracing_subscriber::{
-    filter::EnvFilter,
-    fmt::{self, time::FormatTime},
+    fmt::{self},
     layer::SubscriberExt,
 };
-use tracing_subscriber::{filter::FilterFn, util::SubscriberInitExt};
-use uuid::{uuid, Uuid};
+use uuid::Uuid;
 use walkdir::WalkDir;
 
 use qed_core::{Repository, User};
@@ -111,17 +96,17 @@ struct App {
 }
 
 pub trait LibsqlValueRefExt {
-    fn to_value<'a>(&'a self) -> libsql::ValueRef<'a>;
+    fn to_value(&self) -> libsql::ValueRef<'_>;
 }
 
 impl LibsqlValueRefExt for Uuid {
-    fn to_value<'a>(&'a self) -> libsql::ValueRef<'a> {
+    fn to_value(&self) -> libsql::ValueRef<'_> {
         libsql::ValueRef::Blob(self.as_bytes())
     }
 }
 
 impl LibsqlValueRefExt for String {
-    fn to_value<'a>(&'a self) -> libsql::ValueRef<'a> {
+    fn to_value(&self) -> libsql::ValueRef<'_> {
         libsql::ValueRef::Text(self.as_bytes())
     }
 }
@@ -158,7 +143,7 @@ where
 {
     type Rejection = Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let SessionId(id): SessionId = parts
             .extensions
             .get()
@@ -264,7 +249,7 @@ impl SessionStore for LibsqlSessionStore {
     async fn set(&self, id: Self::Id, record: Self::Record) -> Result<(), Self::Error> {
         let conn = self.db.connect()?;
 
-        let mut rows_changed = conn
+        let rows_changed = conn
             .execute(
                 "UPDATE sessions SET data = ?1 WHERE id = ?2",
                 libsql::params![record, id.as_bytes().as_ref()],
@@ -282,7 +267,7 @@ impl SessionStore for LibsqlSessionStore {
 
         info!("created another session {id}", id = id);
 
-        let mut rows_changed = conn
+        let rows_changed = conn
             .execute(
                 "INSERT INTO sessions (id) VALUES (?1)",
                 libsql::params![id.as_bytes().to_vec()],
@@ -298,7 +283,7 @@ impl SessionStore for LibsqlSessionStore {
 
         info!("deleted session {id}", id = id);
 
-        let mut rows_changed = conn
+        let rows_changed = conn
             .execute(
                 "DELETE FROM sessions WHERE id = ?1",
                 libsql::params![id.as_bytes().to_vec()],
@@ -375,10 +360,10 @@ fn host_to_callback(Host(host): Host, path: impl AsRef<str>) -> String {
     }
 }
 
-fn parse<E: std::error::Error>(
+async fn parse(
     path: impl AsRef<path::Path>,
-    repo: &mut impl qed_core::Repository<Error = E>,
-) -> Document {
+    repo: &impl qed_core::Repository<Error = infra::libsql::Error>,
+) -> Result<Document, Error> {
     use jotdown::{Container as C, Event as E};
 
     let input = String::from_utf8(fs::read(path.as_ref()).unwrap()).unwrap();
@@ -405,9 +390,9 @@ fn parse<E: std::error::Error>(
     }
 
     let mut metadata = toml::from_str::<Metadata>(toml.unwrap().as_ref()).unwrap();
-    let mut test_tags = metadata.tags.clone();
+    let test_tags = metadata.tags.clone();
 
-    events
+    let iter = events
         .iter_mut()
         .filter_map(|event| {
             if let E::Start(C::Div { class: "question" }, ref mut attrs) = event {
@@ -416,46 +401,48 @@ fn parse<E: std::error::Error>(
                 None
             }
         })
-        .zip(0..)
-        .for_each(|(attrs, count)| {
-            if let Some(tags) = attrs.get("data-tags") {
-                let mut tags = tags
-                    .to_string()
-                    .split(',')
-                    .filter(|e| !e.is_empty())
-                    .map(|e| e.to_string())
-                    .collect::<Vec<String>>();
+        .zip(0..);
 
-                let mut q_tags = test_tags
-                    .iter()
-                    .chain(tags.iter())
-                    .cloned()
-                    .collect::<Vec<String>>();
+    for (attrs, count) in iter {
+        if let Some(tags) = attrs.get("data-tags") {
+            let tags = tags
+                .to_string()
+                .split(',')
+                .filter(|e| !e.is_empty())
+                .map(|e| e.to_string())
+                .collect::<Vec<String>>();
 
-                q_tags.sort();
-                q_tags.dedup();
-                q_tags.sort_by_key(|e| e.len());
+            let mut q_tags = test_tags
+                .iter()
+                .chain(tags.iter())
+                .cloned()
+                .collect::<Vec<String>>();
 
-                repo.add_question(&qed_core::Document { id: metadata.uuid }, count, q_tags);
+            q_tags.sort();
+            q_tags.dedup();
+            q_tags.sort_by_key(|e| e.len());
 
-                metadata.tags.append(&mut tags.clone());
-            }
+            repo.add_question(&qed_core::Document { id: metadata.uuid }, count, q_tags)
+                .await?;
 
-            attrs.insert("data-position", format!("{}", count).into());
-            attrs.insert(
-                "data-id",
-                format!(
-                    "{}",
-                    Uuid::new_v5(
-                        &qed_core::NAMESPACE_QUESTION,
-                        format!("{}.{}", metadata.uuid, count).as_bytes(),
-                    )
+            metadata.tags.append(&mut tags.clone());
+        }
+
+        attrs.insert("data-position", format!("{}", count).into());
+        attrs.insert(
+            "data-id",
+            format!(
+                "{}",
+                Uuid::new_v5(
+                    &qed_core::NAMESPACE_QUESTION,
+                    format!("{id}{count}", id = metadata.uuid).as_bytes(),
                 )
-                .into(),
-            );
-            attrs.insert("data-test", format!("{}", metadata.uuid).into());
-            attrs.insert("id", format!("q{}", count).into());
-        });
+            )
+            .into(),
+        );
+        attrs.insert("data-test", format!("{}", metadata.uuid).into());
+        attrs.insert("id", format!("q{}", count).into());
+    }
 
     metadata.tags.sort();
     metadata.tags.dedup();
@@ -466,12 +453,12 @@ fn parse<E: std::error::Error>(
         .push(events.into_iter(), &mut html)
         .unwrap();
 
-    Document {
+    Ok(Document {
         html,
         metadata,
         path: path.as_ref().to_owned(),
         timestamp: Instant::now(),
-    }
+    })
 }
 
 #[axum_macros::debug_handler]
@@ -508,7 +495,6 @@ async fn document_list(
     extract::User(user): extract::User,
 ) -> Result<impl IntoResponse> {
     let docs = app.documents.read().await;
-    let repo = app.repository.lock().await;
 
     let env = app.reloader.acquire_env().unwrap();
     let home_template = env.get_template("document_list.html")?;
@@ -550,10 +536,8 @@ pub struct Claims {
 async fn google_callback(
     State(app): State<Arc<App>>,
     Query(params): Query<Params>,
-    SessionId(id): SessionId,
     record: SessionRecord,
     host: Host,
-    req: Request,
 ) -> Result<impl IntoResponse> {
     let code = AuthorizationCode::new(params.code);
     let expected_state = record.csrf_state.clone().unwrap_or("".to_string());
@@ -588,7 +572,7 @@ async fn google_callback(
 
     let auth = qed_core::Auth::GoogleOauth(google_user.clone());
 
-    let mut repo = app.repository.lock().await;
+    let repo = app.repository.lock().await;
 
     use qed_core::RepositoryError as UE;
 
@@ -602,7 +586,6 @@ async fn google_callback(
         SessionRecord {
             user_id: Some(user.id),
             csrf_state: None,
-            ..record
         },
         Redirect::to("/d"),
     ))
@@ -610,7 +593,6 @@ async fn google_callback(
 
 async fn login(
     State(app): State<Arc<App>>,
-    SessionId(id): SessionId,
     record: SessionRecord,
     host: Host,
 ) -> Result<impl IntoResponse> {
@@ -637,20 +619,16 @@ async fn login(
 }
 
 async fn ensure_session_id(
-    State(app): State<Arc<App>>,
     jar: CookieJar,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Extension(session_store): Extension<
+        Arc<dyn SessionStore<Id = Uuid, Record = SessionRecord, Error = SessionError>>,
+    >,
     mut request: Request,
     next: Next,
 ) -> Result<Response> {
     let span = span!(Level::INFO, "ensure_session_id");
-    let guard = span.enter();
-
-    let session_store = request
-        .extensions()
-        .get::<Arc<dyn SessionStore<Id = Uuid, Record = SessionRecord, Error = SessionError>>>()
-        .cloned()
-        .expect("session_store must exist");
+    let _guard = span.enter();
 
     let id = jar
         .get("id")
@@ -701,12 +679,7 @@ async fn ensure_session_id(
 
     Ok((jar, response).into_response())
 }
-async fn logout(
-    State(app): State<Arc<App>>,
-    SessionId(id): SessionId,
-    jar: CookieJar,
-    record: SessionRecord,
-) -> Result<impl IntoResponse> {
+async fn logout(record: SessionRecord) -> Result<impl IntoResponse> {
     Ok((
         SessionRecord {
             user_id: None,
@@ -742,6 +715,8 @@ async fn main() -> Result<()> {
         debug: env::var("ENV") == Ok("".to_string()),
     };
 
+    warn!("what??");
+
     let db = Arc::new(
         libsql::Builder::new_remote_replica("replica.db", config.turso_url, config.turso_token)
             .sync_interval(std::time::Duration::from_secs(1))
@@ -759,8 +734,7 @@ async fn main() -> Result<()> {
         .filter(|e| e.path().is_file())
         .filter(|e| e.path().extension().map_or(false, |ext| ext == "djot"))
     {
-        let page = parse(entry.path(), repo.lock().await.deref_mut());
-
+        let page = parse(entry.path(), repo.lock().await.deref_mut()).await?;
         docs.write().await.insert(page.metadata.uuid, page);
     }
 
@@ -778,7 +752,9 @@ async fn main() -> Result<()> {
                     if paths.contains(
                         &fs::canonicalize(&page.path).expect("content dir should be present"),
                     ) {
-                        *page = parse(page.path.clone(), repo.blocking_lock().deref_mut());
+                        *page =
+                            block_on(parse(page.path.clone(), repo.blocking_lock().deref_mut()))
+                                .unwrap();
                     }
                 }
             }
@@ -798,7 +774,7 @@ async fn main() -> Result<()> {
         notify::RecursiveMode::NonRecursive,
     )?;
 
-    let mut reloader = minijinja_autoreload::AutoReloader::new(move |notifier| {
+    let reloader = minijinja_autoreload::AutoReloader::new(move |notifier| {
         let path = "templates/";
 
         let mut env = minijinja::Environment::new();

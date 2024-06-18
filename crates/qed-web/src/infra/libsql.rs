@@ -1,8 +1,8 @@
 use crate::{async_trait, LibsqlValueRefExt};
 use ::libsql::params;
 use libsql::named_params;
-use std::{process::id, sync::Arc};
-use uuid::{Timestamp, Uuid};
+use std::{sync::Arc};
+use uuid::{Uuid};
 
 pub struct LibsqlRepository {
     db: Arc<libsql::Database>,
@@ -33,7 +33,7 @@ impl qed_core::Repository for LibsqlRepository {
     type Error = Error;
 
     async fn register_user(&self, auth: Auth) -> Result<User, RepositoryError<Self::Error>> {
-        let conn = self.db.connect().map_err(|err| Error::from(err))?;
+        let conn = self.db.connect().map_err(Error::from)?;
 
         match auth {
             qed_core::Auth::GoogleOauth(google_user) => {
@@ -43,10 +43,10 @@ impl qed_core::Repository for LibsqlRepository {
                         params![google_user.sub.to_value()],
                     )
                     .await
-                    .map_err(|err| Error::from(err))?;
+                    .map_err(Error::from)?;
 
-                let row = rows.next().await.map_err(|err| Error::from(err))?.unwrap();
-                if row.get::<i64>(0).map_err(|err| Error::from(err))? != 0 {
+                let row = rows.next().await.map_err(Error::from)?.unwrap();
+                if row.get::<i64>(0).map_err(Error::from)? != 0 {
                     return Err(qed_core::RepositoryError::UserAlreadyExists(
                         qed_core::Auth::GoogleOauth(google_user),
                     ));
@@ -75,7 +75,7 @@ impl qed_core::Repository for LibsqlRepository {
                     },
                 )
                 .await
-                .map_err(|err| Error::from(err))?;
+                .map_err(Error::from)?;
 
                 conn.execute(
                     r#"
@@ -91,7 +91,7 @@ impl qed_core::Repository for LibsqlRepository {
                     },
                 )
                 .await
-                .map_err(|err| Error::from(err))?;
+                .map_err(Error::from)?;
 
                 conn.execute(
                     r#"
@@ -107,19 +107,19 @@ impl qed_core::Repository for LibsqlRepository {
                     },
                 )
                 .await
-                .map_err(|err| Error::from(err))?;
+                .map_err(Error::from)?;
 
                 Ok(user)
             }
         }
     }
 
-    async fn delete_user(&self, user: User) -> Result<(), RepositoryError<Self::Error>> {
+    async fn delete_user(&self, _user: User) -> Result<(), RepositoryError<Self::Error>> {
         todo!()
     }
 
     async fn get_user_from_auth(&self, auth: Auth) -> Result<User, RepositoryError<Self::Error>> {
-        let conn = self.db.connect().map_err(|err| Error::from(err))?;
+        let conn = self.db.connect().map_err(Error::from)?;
 
         match auth {
             qed_core::Auth::GoogleOauth(google_user) => {
@@ -134,18 +134,18 @@ impl qed_core::Repository for LibsqlRepository {
                         params![google_user.sub.to_value()],
                     )
                     .await
-                    .map_err(|err| Error::from(err))?;
+                    .map_err(Error::from)?;
 
-                if let Some(row) = rows.next().await.map_err(|err| Error::from(err))? {
+                if let Some(row) = rows.next().await.map_err(Error::from)? {
                     let id = row
                         .get_value(0)
-                        .map_err(|err| Error::from(err))?
+                        .map_err(Error::from)?
                         .as_blob()
                         .map(|v| Uuid::from_slice(v.as_slice()))
                         .expect("field should be a uuid blob")
-                        .map_err(|err| Error::from(err))?;
-                    let email = row.get_str(1).map_err(|err| Error::from(err))?.to_owned();
-                    let picture = row.get_str(2).map_err(|err| Error::from(err))?.to_owned();
+                        .map_err(Error::from)?;
+                    let email = row.get_str(1).map_err(Error::from)?.to_owned();
+                    let picture = row.get_str(2).map_err(Error::from)?.to_owned();
 
                     Ok(User::new(id, email, picture))
                 } else {
@@ -156,7 +156,7 @@ impl qed_core::Repository for LibsqlRepository {
     }
 
     async fn get_user_from_id(&self, id: Uuid) -> Result<User, RepositoryError<Self::Error>> {
-        let conn = self.db.connect().map_err(|err| Error::from(err))?;
+        let conn = self.db.connect().map_err(Error::from)?;
 
         let mut rows = conn
             .query(
@@ -168,18 +168,18 @@ impl qed_core::Repository for LibsqlRepository {
                 params![id.to_value()],
             )
             .await
-            .map_err(|err| Error::from(err))?;
+            .map_err(Error::from)?;
 
-        if let Some(row) = rows.next().await.map_err(|err| Error::from(err))? {
+        if let Some(row) = rows.next().await.map_err(Error::from)? {
             let id = row
                 .get_value(0)
-                .map_err(|err| Error::from(err))?
+                .map_err(Error::from)?
                 .as_blob()
                 .map(|v| Uuid::from_slice(v.as_slice()))
                 .expect("field should be a uuid blob")
-                .map_err(|err| Error::from(err))?;
-            let email = row.get_str(1).map_err(|err| Error::from(err))?.to_owned();
-            let picture = row.get_str(2).map_err(|err| Error::from(err))?.to_owned();
+                .map_err(Error::from)?;
+            let email = row.get_str(1).map_err(Error::from)?.to_owned();
+            let picture = row.get_str(2).map_err(Error::from)?.to_owned();
 
             Ok(User::new(id, email, picture))
         } else {
@@ -187,7 +187,7 @@ impl qed_core::Repository for LibsqlRepository {
         }
     }
 
-    async fn get_auth_from_user(&self, user: &User) -> Result<Auth, RepositoryError<Self::Error>> {
+    async fn get_auth_from_user(&self, _user: &User) -> Result<Auth, RepositoryError<Self::Error>> {
         todo!()
     }
 
@@ -197,7 +197,7 @@ impl qed_core::Repository for LibsqlRepository {
         position: u32,
         tags: Vec<String>,
     ) -> Result<Question, RepositoryError<Self::Error>> {
-        let conn = self.db.connect().map_err(|err| Error::from(err))?;
+        let conn = self.db.connect().map_err(Error::from)?;
         let doc_id = document.id;
 
         let q = qed_core::Question {
@@ -212,7 +212,7 @@ impl qed_core::Repository for LibsqlRepository {
 
         conn.execute(
             r#"
-            INSERT OR FAIL INTO questions
+            INSERT OR REPLACE INTO questions
                 (  id,  document_id,  position,  tags )
             VALUES
                 ( :id, :document_id, :position, :tags )
@@ -221,29 +221,29 @@ impl qed_core::Repository for LibsqlRepository {
                 ":id": q.id.to_value(),
                 ":document_id": q.document_id.to_value(),
                 ":position": q.position,
-                ":tags": serde_json::to_string(&q.tags).map_err(|err| Error::from(err))?,
+                ":tags": serde_json::to_string(&q.tags).map_err(Error::from)?,
             },
-        );
+        ).await.map_err(Error::from)?;
 
         Ok(q)
     }
 
-    async fn get_question(&self, id: Uuid) -> Result<Question, RepositoryError<Self::Error>> {
+    async fn get_question(&self, _id: Uuid) -> Result<Question, RepositoryError<Self::Error>> {
         todo!()
     }
 
     async fn add_comment(
         &self,
-        parent: &Commentable,
-        owner: &User,
-        content: impl AsRef<str> + Send + Sync,
+        _parent: &Commentable,
+        _owner: &User,
+        _content: impl AsRef<str> + Send + Sync,
     ) -> Result<Comment, RepositoryError<Self::Error>> {
         todo!()
     }
 
     async fn get_comment_list(
         &self,
-        parent: &Commentable,
+        _parent: &Commentable,
     ) -> Result<Vec<Comment>, RepositoryError<Self::Error>> {
         todo!()
     }

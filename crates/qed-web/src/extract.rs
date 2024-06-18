@@ -1,20 +1,11 @@
-use crate::{infra, App, Claims, LibsqlSessionStore, SessionError, SessionStore, StatusCode};
-use anyhow::anyhow;
+use crate::{infra, App, LibsqlSessionStore, SessionStore, StatusCode};
 use axum::{
     async_trait,
     extract::{FromRef, FromRequestParts},
     http::request::Parts,
     response::{IntoResponse, Response},
-    Extension,
 };
-use axum_extra::extract::{
-    cookie::{self, Cookie},
-    CookieJar,
-};
-use futures::future::OptionFuture;
-use qed_core::Repository;
-use serde::de::IntoDeserializer;
-use std::{ops::Deref, str::FromStr, sync::Arc};
+use std::{ops::Deref, sync::Arc};
 use uuid::Uuid;
 
 pub struct User(pub Option<qed_core::User>);
@@ -49,10 +40,8 @@ where
     type Rejection = UserRejection;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        use axum::RequestPartsExt;
-
         let app: Arc<App> = FromRef::from_ref(state);
-        let mut repo = app.repository.lock().await;
+        let repo = app.repository.lock().await;
 
         let SessionId(id) = SessionId::from_request_parts(parts, state).await.unwrap();
         let session_store = LibsqlSessionStore::new(Arc::clone(&app.db));
@@ -96,7 +85,7 @@ where
 {
     type Rejection = SessionIdRejection;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         Ok(parts
             .extensions
             .get::<SessionId>()
