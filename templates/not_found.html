@@ -1,0 +1,38 @@
+
+<!doctype html>
+<html lang="pt-BR">
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="/assets/tw.css" rel="stylesheet" />
+  <link rel="icon" href="/assets/qed.ico" />
+
+  <title>{% block title %}qed{% endblock %}</title>
+
+  <script>
+    const themeSet = new Set(["dark", "light"]);
+    const theme = window.localStorage.getItem("theme");
+    const preference = window.matchMedia("(prefers-color-scheme: dark)")
+      .matches
+      ? "dark"
+      : "light";
+
+    const root = document.documentElement;
+    root.setAttribute("data-theme", themeSet.has(theme) ? theme : preference);
+
+    function toggleScheme() {
+      let theme = root.getAttribute("data-theme");
+      theme = theme === "dark" ? "light" : "dark";
+
+      root.setAttribute("data-theme", theme);
+      window.localStorage.setItem("theme", theme);
+    }
+  </script>
+</head>
+<body class="flex flex-col justify-center items-center h-screen dark:bg-black dark:text-slate-200 dark:[color-scheme:_dark]">
+  <div class="text-5xl font-bold">404</div>
+  <div class="opacity-70">não achado</div>
+  <div class="opacity-70">not found</div>
+</body>
+
+</html>
