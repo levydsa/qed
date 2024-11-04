@@ -15,7 +15,7 @@
       in
       {
         devShells.default = with pkgs; mkShell {
-            nativeBuildInputs = [ typescript nodejs_22 just pnpm ];
+            nativeBuildInputs = [ typescript nodejs_20 just pnpm ];
 
             shellHook = ''
               export PATH="./node_modules/.bin/:$PATH"
