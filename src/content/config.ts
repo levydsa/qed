@@ -1,4 +1,4 @@
-import { defineCollection, z, type CollectionConfig } from "astro:content";
+import { defineCollection, z } from "astro:content";
 
 export const DocumentSchema = z.object({
   id: z.string(),

@@ -2,13 +2,12 @@
 import { defineConfig } from "astro/config";
 
 import mdx from "@astrojs/mdx";
-
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 
 import tailwind from "@astrojs/tailwind";
-
 import react from "@astrojs/react";
+import vercel from "@astrojs/vercel/serverless";
 
 const macros = {
   "\\vv": "\\overrightarrow",
@@ -26,4 +25,7 @@ export default defineConfig({
     }),
     tailwind({}),
   ],
+
+  output: "server",
+  adapter: vercel(),
 });

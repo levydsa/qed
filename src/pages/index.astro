@@ -1,45 +1,49 @@
 ---
-import Base from "../layout/Base.astro"
-import { sumTags, stringToOklch } from "../components/util.tsx"
-import { getCollection } from "astro:content"
+import Base from "../layout/Base.astro";
+import { sumTags, stringToOklch } from "../components/util.tsx";
+import { getCollection } from "astro:content";
 
-const docs = await getCollection("document")
+const docs = await getCollection("document");
 ---
 
 <Base>
-  <ul class="flex max-w-[110ch] flex-col justify-center gap-5 mt-4">
+  <ul class="mt-4 flex max-w-[110ch] flex-col justify-center gap-5">
     {
-    docs.map(({body, data: { id, title, date, tags, university, department } }) => (
-        <li
-          class="rounded-xl border-2 border-zinc-200 shadow dark:border-zinc-800
-            dark:shadow-zinc-800"
-        >
-          <a class="flex flex-col px-5 py-6" href={`/d/${id}`}>
-            <h3 class="font-['Computer_Modern_Serif'] text-xl font-semibold">{title}</h3>
-            <aside class="opacity-70">{`(${university}, ${department}) (${date.customFormat()})`}</aside>
+      docs.map(
+        ({ body, data: { id, title, date, tags, university, department } }) => (
+          <li
+            class="rounded-xl border-2 border-zinc-200 shadow dark:border-zinc-800
+              dark:shadow-zinc-800"
+          >
+            <a class="flex flex-col px-5 py-6" href={`/d/${id}`}>
+              <h3 class="font-['Computer_Modern_Serif'] text-xl font-semibold">
+                {title}
+              </h3>
+              <aside class="opacity-70">{`(${university}, ${department}) (${date.customFormat()})`}</aside>
 
-            <div class="flex flex-wrap mt-4">
-              {([...new Set([...sumTags(body), ...tags])])
-                .sort((a, b) => a.localeCompare(b))
-                .map((value) => {
-                  const { light, dark } = stringToOklch(value);
+              <div class="mt-4 flex flex-wrap">
+                {[...new Set([...sumTags(body), ...tags])]
+                  .sort((a, b) => a.localeCompare(b))
+                  .map((value) => {
+                    const { light, dark } = stringToOklch(value);
 
-                  return (
-                    <div
-                      style={{
-                        "--light-tag-color": light,
-                        "--dark-tag-color": dark,
-                      }}
-                      class="tag mx-0.5 my-0.5 text-nowrap rounded-xl px-2"
-                    >
-                      {value}
-                    </div>
-                  );
-                })}
-            </div>
-          </a>
-        </li>
-      ))
+                    return (
+                      <div
+                        style={{
+                          "--light-tag-color": light,
+                          "--dark-tag-color": dark,
+                        }}
+                        class="tag mx-0.5 my-0.5 text-nowrap rounded-xl px-2"
+                      >
+                        {value}
+                      </div>
+                    );
+                  })}
+              </div>
+            </a>
+          </li>
+        ),
+      )
     }
   </ul>
 </Base>

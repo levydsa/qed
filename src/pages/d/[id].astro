@@ -4,6 +4,8 @@ import { MdxDocument } from "../../components/MdxPage.tsx";
 
 import { getCollection } from "astro:content";
 
+export const prerender = true;
+
 export async function getStaticPaths() {
   const docs = await getCollection("document");
   return docs.map((entry: any) => {

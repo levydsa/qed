@@ -11,11 +11,14 @@ export const TagsContext = createContext<{
   addTags: (newTags: string[]) => void;
 } | null>(null);
 
-export const TagsProvider: FC<{ initial?: string[], children: ReactNode }> = ({ initial = [], children }) => {
+export const TagsProvider: FC<{ initial?: string[]; children: ReactNode }> = ({
+  initial = [],
+  children,
+}) => {
   const [tags, setTags] = useState<string[]>(initial);
 
   const addTags = (newTags: string[]) => {
-    setTags(prev => Array.from(new Set([...prev, ...newTags])))
+    setTags((prev) => Array.from(new Set([...prev, ...newTags])));
   };
 
   return (

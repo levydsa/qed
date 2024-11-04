@@ -1,12 +1,12 @@
-import { evaluateSync, type Jsx } from "@mdx-js/mdx"
-import remarkMath from "remark-math"
-import rehypeKatex from "rehype-katex"
+import { evaluateSync, type Jsx } from "@mdx-js/mdx";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 
-import Giscus from "@giscus/react"
-import * as runtime from "react/jsx-runtime"
-import { useCollapse } from "react-collapsed"
-import * as fa from "react-icons/fa"
-import "./util.tsx"
+import Giscus from "@giscus/react";
+import * as runtime from "react/jsx-runtime";
+import { useCollapse } from "react-collapsed";
+import * as fa from "react-icons/fa";
+import "./util.tsx";
 
 import { useCount, CountProvider } from "./count.tsx";
 import { useTags, TagsProvider } from "./tags.tsx";
@@ -14,8 +14,8 @@ import { useTheme, ThemeProvider, type Theme } from "./theme.tsx";
 import { useMetadata, MetadataProvider, type Metadata } from "./metadata.tsx";
 
 import React, { useEffect, useState, type FC, type ReactNode } from "react";
-import type { MDXComponents } from "mdx/types"
-import { stringToOklch } from "./util.tsx"
+import type { MDXComponents } from "mdx/types";
+import { stringToOklch } from "./util.tsx";
 
 const GiscusDocument: FC = () => {
   const theme = useTheme();
@@ -76,8 +76,8 @@ const Question: FC<{ tags: string[]; children: ReactNode }> = ({
   const { getCollapseProps, getToggleProps, isExpanded } = useCollapse();
 
   useEffect(() => {
-    setCount(nextCount())
-    addTags(tags)
+    setCount(nextCount());
+    addTags(tags);
   }, []);
 
   return (
@@ -103,7 +103,7 @@ const Question: FC<{ tags: string[]; children: ReactNode }> = ({
 
         <section
           {...getCollapseProps()}
-          className="h-96 max-h-96 overflow-y-auto mb-4"
+          className="mb-4 h-96 max-h-96 overflow-y-auto"
         >
           {isExpanded && count != null && <GiscusQuestion count={count} />}
         </section>
@@ -115,36 +115,36 @@ const Question: FC<{ tags: string[]; children: ReactNode }> = ({
 const Tags: FC = () => {
   const { tags } = useTags();
 
-  return (<>
-    {
-      tags.sort((a, b) => a.localeCompare(b)).map((value) => {
-        const { light, dark } = stringToOklch(value)
+  return (
+    <>
+      {tags
+        .sort((a, b) => a.localeCompare(b))
+        .map((value) => {
+          const { light, dark } = stringToOklch(value);
 
-        return (
-          <div
-            key={value}
-            style={{
-              "--light-tag-color": light,
-              "--dark-tag-color": dark,
-            }}
-            className="tag rounded-xl px-2 mx-0.5 my-0.5 text-nowrap"
-          >
-            {value}
-          </div>
-        );
-      })
-    }
-  </>)
+          return (
+            <div
+              key={value}
+              style={
+                {
+                  "--light-tag-color": light,
+                  "--dark-tag-color": dark,
+                } as React.CSSProperties
+              }
+              className="tag mx-0.5 my-0.5 text-nowrap rounded-xl px-2"
+            >
+              {value}
+            </div>
+          );
+        })}
+    </>
+  );
 };
 
 export const components: MDXComponents = {
   Question,
   ul({ children }) {
-    return (
-      <ul className={"mb-8 mt-4 flex flex-col gap-3"}>
-        {children}
-      </ul>
-    );
+    return <ul className={"mb-8 mt-4 flex flex-col gap-3"}>{children}</ul>;
   },
   Image({ invertable, ...rest }) {
     return (
@@ -158,7 +158,7 @@ export const components: MDXComponents = {
     return (
       <div
         className="my-10 rounded-xl border-2 border-orange-200 bg-orange-50 px-5 py-4
-                      dark:border-orange-500/50 dark:bg-orange-500/20"
+          dark:border-orange-500/50 dark:bg-orange-500/20"
       >
         {children}
       </div>
@@ -176,11 +176,11 @@ export const MdxDocument: FC<{ body: string; metadata: Metadata }> = ({
   body,
   metadata,
 }) => {
-  const [Content, setContent] = useState<React.FC | null>(null)
-  const [loaded, setLoaded] = useState(false)
+  const [Content, setContent] = useState<React.FC | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    const {default: Content} = evaluateSync(body, {
+    const { default: Content } = evaluateSync(body, {
       rehypePlugins: [[rehypeKatex, { macros: macros }]],
       remarkPlugins: [remarkMath],
       jsx: runtime.jsx as Jsx,
@@ -189,7 +189,7 @@ export const MdxDocument: FC<{ body: string; metadata: Metadata }> = ({
     });
 
     // NOTE: Eu não faço a menor ideia do porquê que isso só funciona assim.
-    setContent(() => () => <Content components={components} />)
+    setContent(() => () => <Content components={components} />);
 
     setLoaded(true);
   }, [body]);
@@ -199,17 +199,21 @@ export const MdxDocument: FC<{ body: string; metadata: Metadata }> = ({
       <TagsProvider initial={metadata.tags}>
         <MetadataProvider value={metadata}>
           <ThemeProvider>
-            <h1 className="font-['Computer_Modern_Serif'] text-center text-2xl">{metadata.title}</h1>
-            <aside className="text-center opacity-60 text-nowrap">
+            <h1 className="text-center font-['Computer_Modern_Serif'] text-2xl">
+              {metadata.title}
+            </h1>
+            <aside className="text-nowrap text-center opacity-60">
               {`(${metadata.university}, ${metadata.department}) (${metadata.date.customFormat()})`}
             </aside>
 
-            <div className="flex flex-wrap mt-2 justify-center">
+            <div className="mt-2 flex flex-wrap justify-center">
               <Tags />
             </div>
 
             <div
-              className={`font-['Computer_Modern_Serif'] text-lg my-10 transition-opacity duration-500 hyphens-auto text-justify leading-tight ${loaded ? "opacity-100" : "opacity-0"}`}
+              className={`my-10 hyphens-auto text-justify font-['Computer_Modern_Serif'] text-lg
+                leading-tight transition-opacity duration-500
+                ${loaded ? "opacity-100" : "opacity-0"}`}
             >
               <CountProvider>{Content && <Content />}</CountProvider>
             </div>
