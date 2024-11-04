@@ -1,0 +1,13 @@
+---
+import { twMerge } from "tailwind-merge";
+const { class: className } = Astro.props;
+---
+
+<div
+  class={twMerge(
+    "prose dark:prose-invert prose-h1:text-xl hyphens-auto text-justify leading-tight",
+    className,
+  )}
+>
+  <slot />
+</div>

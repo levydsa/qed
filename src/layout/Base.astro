@@ -1,0 +1,72 @@
+---
+import * as fa from "react-icons/fa";
+import "../../base.css";
+
+const { title } = Astro.props;
+---
+
+<script is:inline>
+  const themeSet = new Set(["dark", "light"]);
+  const theme = window.localStorage.getItem("theme");
+  const preference = window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+
+  const root = document.documentElement;
+  root.setAttribute("data-theme", themeSet.has(theme) ? theme : preference);
+
+  window.toggleScheme = () => {
+    let theme = root.getAttribute("data-theme");
+    theme = theme === "dark" ? "light" : "dark";
+
+    root.setAttribute("data-theme", theme);
+    window.localStorage.setItem("theme", theme);
+  };
+</script>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.png" />
+    <link
+      rel="stylesheet"
+      type="text/css"
+      href="/fonts/Computer-Modern/cmun-serif.css"
+      crossorigin="anonymous"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css"
+      integrity="sha384-wcIxkf4k558AjM3Yz3BBFQUbk/zgIYC2R0QpeeYb+TwlBVMrlgLqwRjRtGZiK7ww"
+      crossorigin="anonymous"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="generator" content={Astro.generator} />
+    <title>{title}</title>
+  </head>
+  <body
+    class="flex min-h-screen flex-col items-center bg-zinc-50 text-zinc-950
+      dark:bg-zinc-950 dark:text-zinc-100"
+  >
+    <nav
+      class="relative mx-[2ch] my-6 flex w-full items-center justify-center px-4"
+    >
+      <a href="/">
+        <fa.FaSquare className="mx-auto h-8 w-8 justify-self-center" />
+      </a>
+
+      <button
+        class="absolute right-4 flex h-6 w-6 items-center text-5xl"
+        type="button"
+        aria-label="Toggle dark theme"
+        onclick="toggleScheme()"
+      >
+        <fa.FaSun />
+      </button>
+    </nav>
+
+    <main class="mx-[2ch] max-w-[60ch]">
+      <slot />
+    </main>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@media (min-width: 768px) {
+  ::-webkit-scrollbar {
+    @apply w-1 bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-lg bg-zinc-900 shadow-stone-900 hover:bg-stone-600 dark:bg-zinc-100;
+  }
+}
+
+[data-theme="dark"]:root {
+  color-scheme: dark;
+}
+
+.tag {
+  @apply bg-[--light-tag-color] dark:bg-[--dark-tag-color];
+}

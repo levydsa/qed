@@ -1,0 +1,19 @@
+---
+import Base from "../../layout/Base.astro";
+import { MdxDocument } from "../../components/MdxPage.tsx";
+
+import { getCollection } from "astro:content";
+
+export async function getStaticPaths() {
+  const docs = await getCollection("document");
+  return docs.map((entry: any) => {
+    return { params: { id: entry.data.id }, props: { entry } };
+  });
+}
+
+const { entry }: { entry: any } = Astro.props;
+---
+
+<Base>
+  <MdxDocument client:load body={entry.body} metadata={entry.data} />
+</Base>
